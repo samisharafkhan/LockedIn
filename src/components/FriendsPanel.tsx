@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { UserPlus, UserMinus } from "lucide-react";
+import { ChevronDown, UserPlus, UserMinus } from "lucide-react";
 import { activityById } from "../data/activities";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
 import { blockEndMinutesExclusive, blockStartMinutes } from "../lib/scheduleBlocks";
 import { formatMinRange, overlapSegments } from "../lib/overlap";
-import { minutesSinceMidnight } from "../lib/time";
+import { formatHm, minutesSinceMidnight } from "../lib/time";
+import type { TimeBlock } from "../types";
 
-const VIEW = { start: 0, end: 24 * 60 };
-
-function layoutPct(s: number, e: number) {
-  const len = VIEW.end - VIEW.start;
-  const top = ((Math.max(s, VIEW.start) - VIEW.start) / len) * 100;
-  const h = ((Math.min(e, VIEW.end) - Math.max(s, VIEW.start)) / len) * 100;
-  return { top, height: Math.max(h, 2) };
+function currentBlock(blocks: TimeBlock[], nowMin: number) {
+  return (
+    blocks.find(
+      (b) => nowMin >= blockStartMinutes(b) && nowMin < blockEndMinutesExclusive(b),
+    ) ?? null
+  );
 }
 
 export function FriendsPanel() {
@@ -27,6 +27,7 @@ export function FriendsPanel() {
     getFriend,
   } = useSchedule();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dayExpanded, setDayExpanded] = useState(false);
 
   useEffect(() => {
     if (followingIds.length === 0) {
@@ -38,12 +39,18 @@ export function FriendsPanel() {
     }
   }, [followingIds, selectedId]);
 
+  useEffect(() => {
+    setDayExpanded(false);
+  }, [selectedId]);
+
   const friend = selectedId ? getFriend(selectedId) : undefined;
   const friendBlocks = friend?.blocks ?? [];
 
   const segs = useMemo(() => overlapSegments(blocks, friendBlocks), [blocks, friendBlocks]);
 
   const nowMin = minutesSinceMidnight(new Date());
+  const mineNow = currentBlock(blocks, nowMin);
+  const theirsNow = currentBlock(friendBlocks, nowMin);
 
   return (
     <section className="friends" aria-labelledby="friends-heading">
@@ -101,7 +108,7 @@ export function FriendsPanel() {
         <h3 className="friends__h3">Compare today</h3>
         <div className="seg-tabs" role="tablist" aria-label="Pick a friend to compare">
           {followingIds.length === 0 ? (
-            <p className="friends__empty">Follow someone to unlock side-by-side overlap.</p>
+            <p className="friends__empty">Follow someone to compare what you’re both in right now.</p>
           ) : (
             followingIds.map((id) => {
               const f = getFriend(id);
@@ -123,51 +130,109 @@ export function FriendsPanel() {
 
         {friend ? (
           <>
-            <div className="dual-cal">
-              <div className="dual-cal__col">
-                <p className="dual-cal__label">You</p>
-                <div className="dual-cal__surface">
-                  <span className="dual-cal__now" style={{ top: `${(nowMin / (24 * 60)) * 100}%` }} />
-                  {blocks.map((b) => {
-                    const s = blockStartMinutes(b);
-                    const e = blockEndMinutesExclusive(b);
-                    const { top, height } = layoutPct(s, e);
-                    const a = activityById(b.activityId);
-                    return (
-                      <div
-                        key={b.id}
-                        className="dual-cal__block dual-cal__block--me"
-                        style={{ top: `${top}%`, height: `${height}%` }}
-                        title={a.label}
-                      >
-                        <ActivityIcon id={b.activityId} size={14} />
-                      </div>
-                    );
-                  })}
-                </div>
+            <div className="compare-now">
+              <div className="compare-now__card compare-now__card--me">
+                <p className="compare-now__eyebrow">You · right now</p>
+                {mineNow ? (
+                  <>
+                    <div className="compare-now__icon" aria-hidden>
+                      <ActivityIcon id={mineNow.activityId} size={26} />
+                    </div>
+                    <p className="compare-now__label">{activityById(mineNow.activityId).label}</p>
+                    <p className="compare-now__time">
+                      {formatHm(mineNow.startHour, mineNow.startMinute)} –{" "}
+                      {mineNow.endHour === 24 && mineNow.endMinute === 0
+                        ? "midnight"
+                        : formatHm(mineNow.endHour, mineNow.endMinute)}
+                    </p>
+                  </>
+                ) : (
+                  <p className="compare-now__empty">Nothing on your calendar for this moment.</p>
+                )}
               </div>
-              <div className="dual-cal__col">
-                <p className="dual-cal__label">{friend.displayName}</p>
-                <div className="dual-cal__surface">
-                  <span className="dual-cal__now" style={{ top: `${(nowMin / (24 * 60)) * 100}%` }} />
-                  {friendBlocks.map((b) => {
-                    const s = blockStartMinutes(b);
-                    const e = blockEndMinutesExclusive(b);
-                    const { top, height } = layoutPct(s, e);
-                    return (
-                      <div
-                        key={b.id}
-                        className="dual-cal__block dual-cal__block--them"
-                        style={{ top: `${top}%`, height: `${height}%` }}
-                        title={activityById(b.activityId).label}
-                      >
-                        <ActivityIcon id={b.activityId} size={14} />
-                      </div>
-                    );
-                  })}
-                </div>
+              <div className="compare-now__card compare-now__card--them">
+                <p className="compare-now__eyebrow">{friend.displayName} · right now</p>
+                {theirsNow ? (
+                  <>
+                    <div className="compare-now__icon" aria-hidden>
+                      <ActivityIcon id={theirsNow.activityId} size={26} />
+                    </div>
+                    <p className="compare-now__label">{activityById(theirsNow.activityId).label}</p>
+                    <p className="compare-now__time">
+                      {formatHm(theirsNow.startHour, theirsNow.startMinute)} –{" "}
+                      {theirsNow.endHour === 24 && theirsNow.endMinute === 0
+                        ? "midnight"
+                        : formatHm(theirsNow.endHour, theirsNow.endMinute)}
+                    </p>
+                  </>
+                ) : (
+                  <p className="compare-now__empty">Nothing on their demo arc for this moment.</p>
+                )}
               </div>
             </div>
+
+            <button
+              type="button"
+              className={`compare-expand ${dayExpanded ? "compare-expand--open" : ""}`}
+              onClick={() => setDayExpanded((v) => !v)}
+              aria-expanded={dayExpanded}
+            >
+              <span className="compare-expand__text">
+                {dayExpanded ? "Hide full day" : "See full day for both"}
+              </span>
+              <ChevronDown className="compare-expand__chev" size={20} strokeWidth={2} aria-hidden />
+            </button>
+
+            {dayExpanded ? (
+              <div className="compare-day-panels">
+                <div className="compare-day">
+                  <h4 className="compare-day__title">Your day</h4>
+                  <ul className="compare-day__list">
+                    {blocks.length === 0 ? (
+                      <li className="compare-day__empty">No blocks yet.</li>
+                    ) : (
+                      blocks.map((b) => (
+                        <li key={b.id} className="compare-day__row">
+                          <span className="compare-day__ico" aria-hidden>
+                            <ActivityIcon id={b.activityId} size={18} />
+                          </span>
+                          <div>
+                            <p className="compare-day__name">{activityById(b.activityId).label}</p>
+                            <p className="compare-day__meta">
+                              {formatHm(b.startHour, b.startMinute)} –{" "}
+                              {b.endHour === 24 && b.endMinute === 0
+                                ? "midnight"
+                                : formatHm(b.endHour, b.endMinute)}
+                            </p>
+                          </div>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+                <div className="compare-day">
+                  <h4 className="compare-day__title">{`${friend.displayName}'s day (demo)`}</h4>
+                  <ul className="compare-day__list">
+                    {friendBlocks.map((b) => (
+                      <li key={b.id} className="compare-day__row">
+                        <span className="compare-day__ico" aria-hidden>
+                          <ActivityIcon id={b.activityId} size={18} />
+                        </span>
+                        <div>
+                          <p className="compare-day__name">{activityById(b.activityId).label}</p>
+                          <p className="compare-day__meta">
+                            {formatHm(b.startHour, b.startMinute)} –{" "}
+                            {b.endHour === 24 && b.endMinute === 0
+                              ? "midnight"
+                              : formatHm(b.endHour, b.endMinute)}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : null}
 
             <div className="overlap-list">
               <h4 className="overlap-list__title">Overlap windows</h4>
