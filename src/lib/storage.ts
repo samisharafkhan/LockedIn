@@ -1,15 +1,21 @@
 const KEY = "lockedin:v1";
 
+export type StoredBlock = {
+  id: string;
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+  activityId: string;
+  outcome?: "done" | "not_done";
+};
+
 export type StoredState = {
   profile: { handle: string; displayName: string; avatarEmoji: string };
-  blocks: {
-    id: string;
-    startHour: number;
-    startMinute: number;
-    endHour: number;
-    endMinute: number;
-    activityId: string;
-  }[];
+  /** @deprecated migrated into blocksByDay */
+  blocks?: StoredBlock[];
+  blocksByDay?: Record<string, StoredBlock[]>;
+  followingIds?: string[];
   pulse?: { activityId: string; at: number };
   onboarded?: boolean;
 };

@@ -9,23 +9,38 @@ function formatTime(ts: number) {
   }).format(new Date(ts));
 }
 
-export function PulsePanel() {
+type Props = {
+  /** Compact layout when nested inside Profile */
+  embedded?: boolean;
+};
+
+export function PulsePanel({ embedded }: Props) {
   const { pulse, setPulse, clearPulse, profile } = useSchedule();
 
   return (
-    <section className="pulse" aria-labelledby="pulse-heading">
-      <div className="pulse__head">
-        <div>
-          <p className="eyebrow eyebrow--dark">Right now</p>
-          <h2 id="pulse-heading" className="pulse__title">
-            What are you doing?
-          </h2>
-          <p className="pulse__sub">One tap. Friends see the label, not your whole calendar.</p>
+    <section
+      className={`pulse ${embedded ? "pulse--embedded" : ""}`}
+      aria-labelledby={embedded ? undefined : "pulse-heading"}
+      aria-label={embedded ? "Pulse" : undefined}
+    >
+      {!embedded ? (
+        <div className="pulse__head">
+          <div>
+            <p className="eyebrow eyebrow--dark">Right now</p>
+            <h2 id="pulse-heading" className="pulse__title">
+              What are you doing?
+            </h2>
+            <p className="pulse__sub">
+              One tap. Friends see the label, not your whole calendar.
+            </p>
+          </div>
+          <div className="avatar-ring" aria-hidden>
+            <span className="avatar-ring__glyph">{profile.avatarEmoji}</span>
+          </div>
         </div>
-        <div className="avatar-ring" aria-hidden>
-          <span className="avatar-ring__glyph">{profile.avatarEmoji}</span>
-        </div>
-      </div>
+      ) : (
+        <p className="pulse__embed-lede">Set a quick pulse for friends to see alongside your week.</p>
+      )}
 
       {pulse ? (
         <div className="pulse__active">

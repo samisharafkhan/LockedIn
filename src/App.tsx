@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { BottomNav, type TabId } from "./components/BottomNav";
-import { MePanel } from "./components/MePanel";
+import { CelebritiesPanel } from "./components/CelebritiesPanel";
+import { FriendsPanel } from "./components/FriendsPanel";
 import { Onboarding } from "./components/Onboarding";
-import { PulsePanel } from "./components/PulsePanel";
+import { ProfilePanel } from "./components/ProfilePanel";
 import { SchedulePanel } from "./components/SchedulePanel";
 import { ScheduleProvider, useSchedule } from "./context/ScheduleContext";
 
 function Shell() {
   const { profile, onboardingDone } = useSchedule();
-  const [tab, setTab] = useState<TabId>("schedule");
+  const [tab, setTab] = useState<TabId>("build");
 
   if (!onboardingDone) {
     return <Onboarding />;
@@ -19,7 +20,7 @@ function Shell() {
       <header className="top">
         <div>
           <p className="top__brand">LockedIn</p>
-          <p className="top__tag">Your day, your blocks — share the vibe, not every detail.</p>
+          <p className="top__tag">Build your day, line up with friends, borrow energy from public arcs.</p>
         </div>
         <div className="top__user">
           <span className="top__emoji" aria-hidden>
@@ -33,9 +34,10 @@ function Shell() {
       </header>
 
       <main className="main">
-        {tab === "schedule" ? <SchedulePanel /> : null}
-        {tab === "pulse" ? <PulsePanel /> : null}
-        {tab === "me" ? <MePanel /> : null}
+        {tab === "build" ? <SchedulePanel /> : null}
+        {tab === "friends" ? <FriendsPanel /> : null}
+        {tab === "stars" ? <CelebritiesPanel /> : null}
+        {tab === "profile" ? <ProfilePanel /> : null}
       </main>
 
       <BottomNav tab={tab} onChange={setTab} />

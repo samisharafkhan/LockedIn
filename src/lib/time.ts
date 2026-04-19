@@ -1,12 +1,13 @@
 import type { ActivityId, TimeBlock } from "../types";
+import { blockEndMinutesExclusive, blockStartMinutes } from "./scheduleBlocks";
 
 export function minutesSinceMidnight(d: Date) {
   return d.getHours() * 60 + d.getMinutes();
 }
 
 export function blockContainsMinute(block: TimeBlock, minute: number) {
-  const start = block.startHour * 60 + block.startMinute;
-  const end = block.endHour * 60 + block.endMinute;
+  const start = blockStartMinutes(block);
+  const end = blockEndMinutesExclusive(block);
   if (end <= start) return minute >= start || minute < end;
   return minute >= start && minute < end;
 }

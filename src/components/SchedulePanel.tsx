@@ -4,9 +4,13 @@ import { activityById } from "../data/activities";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
 import { BlockSheet } from "./BlockSheet";
-import type { TimeBlock } from "../types";
-import { blockEndMinutesExclusive, blockStartMinutes, defaultNewBlockRange } from "../lib/scheduleBlocks";
-import { formatHm } from "../lib/time";
+import type { BlockOutcome, TimeBlock } from "../types";
+import {
+  blockEndMinutesExclusive,
+  blockStartMinutes,
+  defaultNewBlockRange,
+} from "../lib/scheduleBlocks";
+import { formatHm, minutesSinceMidnight } from "../lib/time";
 
 const VIEW_START_MIN = 0;
 const VIEW_END_MIN = 24 * 60;
@@ -31,14 +35,34 @@ function todayLabel() {
   }).format(new Date());
 }
 
+function needsCheckIn(b: TimeBlock, nowMin: number) {
+  return nowMin >= blockEndMinutesExclusive(b) && !b.outcome;
+}
+
+function isActive(b: TimeBlock, nowMin: number) {
+  return nowMin >= blockStartMinutes(b) && nowMin < blockEndMinutesExclusive(b);
+}
+
+function progress01(b: TimeBlock, nowMin: number) {
+  const s = blockStartMinutes(b);
+  const e = blockEndMinutesExclusive(b);
+  if (e <= s) return 0;
+  return Math.min(1, Math.max(0, (nowMin - s) / (e - s)));
+}
+
 export function SchedulePanel() {
-  const { blocks, profile, addBlock, updateBlock, removeBlock } = useSchedule();
+  const { blocks, profile, addBlock, updateBlock, removeBlock, setBlockOutcome, tick } =
+    useSchedule();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetMode, setSheetMode] = useState<
     | { kind: "add"; defaults: Omit<TimeBlock, "id"> }
     | { kind: "edit"; block: TimeBlock }
     | null
   >(null);
+
+  const nowMin = useMemo(() => minutesSinceMidnight(new Date()), [tick, blocks]);
+
+  const pending = useMemo(() => blocks.filter((b) => needsCheckIn(b, nowMin)), [blocks, nowMin]);
 
   const hours = useMemo(() => {
     const list: number[] = [];
@@ -83,20 +107,65 @@ export function SchedulePanel() {
     }
   };
 
+  const mark = (id: string, outcome: BlockOutcome) => {
+    setBlockOutcome(id, outcome);
+  };
+
   return (
     <section className="schedule" aria-labelledby="sched-heading">
       <div className="schedule__intro">
         <div>
-          <p className="eyebrow eyebrow--dark">Today</p>
+          <p className="eyebrow eyebrow--dark">Build</p>
           <h2 id="sched-heading" className="schedule__title">
             {todayLabel()}
           </h2>
-          <p className="schedule__sub">Build your day — tap a block to edit, or add a new one.</p>
+          <p className="schedule__sub">
+            Stack your own blocks — tap to edit. Past blocks ask for a quick done check-in.
+          </p>
         </div>
         <button type="button" className="avatar-ring" aria-label="You">
           <span className="avatar-ring__glyph">{profile.avatarEmoji}</span>
         </button>
       </div>
+
+      {pending.length ? (
+        <div className="checkin-banner" role="region" aria-label="Block check-ins">
+          <p className="checkin-banner__title">Quick check-in</p>
+          <p className="checkin-banner__sub">
+            A few blocks already ended — did you stick to them?
+          </p>
+          <ul className="checkin-list">
+            {pending.map((b) => {
+              const a = activityById(b.activityId);
+              return (
+                <li key={b.id} className="checkin-row">
+                  <div>
+                    <p className="checkin-row__name">{a.label}</p>
+                    <p className="checkin-row__time">
+                      {formatHm(b.startHour, b.startMinute)} –{" "}
+                      {b.endHour === 24 && b.endMinute === 0
+                        ? "midnight"
+                        : formatHm(b.endHour, b.endMinute)}
+                    </p>
+                  </div>
+                  <div className="checkin-row__actions">
+                    <button type="button" className="btn btn--sm btn--primary" onClick={() => mark(b.id, "done")}>
+                      Done
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--sm btn--outline"
+                      onClick={() => mark(b.id, "not_done")}
+                    >
+                      Not quite
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="cal">
         <div className="cal__grid" aria-hidden>
@@ -113,24 +182,30 @@ export function SchedulePanel() {
         </div>
 
         <div className="cal__blocks">
+          <span className="cal__now-line" style={{ top: `${(nowMin / (24 * 60)) * 100}%` }} aria-hidden />
           {blocks.length === 0 ? (
             <div className="cal__empty">
               <p className="cal__empty-title">Nothing here yet</p>
-              <p className="cal__empty-text">Add your first block — it takes a few seconds.</p>
+              <p className="cal__empty-text">Tap + to add your first block.</p>
             </div>
           ) : null}
           {blocks.map((b) => {
             const layout = blockLayout(b);
             if (!layout) return null;
             const a = activityById(b.activityId);
+            const active = isActive(b, nowMin);
+            const past = nowMin >= blockEndMinutesExclusive(b);
+            const pct = active ? progress01(b, nowMin) * 100 : past ? 100 : 0;
+            const pendingFlag = needsCheckIn(b, nowMin);
             return (
               <button
                 key={b.id}
                 type="button"
-                className="cal__block"
+                className={`cal__block ${active ? "cal__block--active" : ""} ${past ? "cal__block--past" : ""} ${pendingFlag ? "cal__block--pending" : ""}`}
                 style={{ top: `${layout.top}%`, height: `${Math.max(layout.height, 3)}%` }}
                 onClick={() => openEdit(b)}
               >
+                {active ? <div className="cal__block-progress" style={{ height: `${pct}%` }} /> : null}
                 <span className="cal__block-icon" aria-hidden>
                   <ActivityIcon id={b.activityId} size={18} />
                 </span>
@@ -142,6 +217,10 @@ export function SchedulePanel() {
                       ? "midnight"
                       : formatHm(b.endHour, b.endMinute)}
                   </span>
+                  {b.outcome === "done" ? <span className="cal__badge cal__badge--done">Done</span> : null}
+                  {b.outcome === "not_done" ? (
+                    <span className="cal__badge cal__badge--miss">Missed</span>
+                  ) : null}
                 </span>
               </button>
             );

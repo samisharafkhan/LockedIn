@@ -8,17 +8,30 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { ActivityId, Profile, Pulse, TimeBlock } from "../types";
-import { loadState, saveState, type StoredState } from "../lib/storage";
+import type { ActivityId, BlockOutcome, Profile, Pulse, TimeBlock } from "../types";
+import { CELEBRITY_ARCHETYPES } from "../data/celebrities";
+import { DEMO_FRIENDS, type FriendProfile } from "../data/friends";
+import { isoDate } from "../lib/dates";
+import { loadState, saveState, type StoredBlock, type StoredState } from "../lib/storage";
 import { sortBlocks } from "../lib/scheduleBlocks";
 
 type ScheduleContextValue = {
+  tick: number;
   profile: Profile;
   setProfile: (p: Partial<Profile>) => void;
+  /** Today’s editable blocks */
   blocks: TimeBlock[];
+  scheduleByDay: Record<string, TimeBlock[]>;
   addBlock: (b: Omit<TimeBlock, "id">) => void;
   updateBlock: (id: string, patch: Partial<Omit<TimeBlock, "id">>) => void;
   removeBlock: (id: string) => void;
+  setBlockOutcome: (id: string, outcome: BlockOutcome) => void;
+  followingIds: string[];
+  toggleFollow: (friendId: string) => void;
+  isFollowing: (friendId: string) => boolean;
+  friends: FriendProfile[];
+  getFriend: (id: string) => FriendProfile | undefined;
+  celebrities: typeof CELEBRITY_ARCHETYPES;
   pulse: Pulse | null;
   setPulse: (activityId: ActivityId) => void;
   clearPulse: () => void;
@@ -41,22 +54,55 @@ function newId() {
   return `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function fromStoredBlock(b: StoredBlock): TimeBlock {
+  return {
+    id: b.id,
+    startHour: b.startHour,
+    startMinute: b.startMinute,
+    endHour: b.endHour,
+    endMinute: b.endMinute,
+    activityId: b.activityId as ActivityId,
+    ...(b.outcome ? { outcome: b.outcome } : {}),
+  };
+}
+
+function toStoredBlock(b: TimeBlock): StoredBlock {
+  return {
+    id: b.id,
+    startHour: b.startHour,
+    startMinute: b.startMinute,
+    endHour: b.endHour,
+    endMinute: b.endMinute,
+    activityId: b.activityId,
+    ...(b.outcome ? { outcome: b.outcome } : {}),
+  };
+}
+
+function pruneByDay(map: Record<string, TimeBlock[]>, keepDays = 21) {
+  const keys = Object.keys(map).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  const next: Record<string, TimeBlock[]> = {};
+  for (const k of keys.slice(0, keepDays)) {
+    next[k] = map[k];
+  }
+  return next;
+}
+
 function toStored(
   profile: Profile,
-  blocks: TimeBlock[],
+  scheduleByDay: Record<string, TimeBlock[]>,
+  followingIds: string[],
   pulse: Pulse | null,
   onboarded: boolean,
 ): StoredState {
+  const blocksByDay: Record<string, StoredBlock[]> = {};
+  const pruned = pruneByDay(scheduleByDay);
+  for (const [day, list] of Object.entries(pruned)) {
+    blocksByDay[day] = list.map(toStoredBlock);
+  }
   return {
     profile: { ...profile },
-    blocks: blocks.map((b) => ({
-      id: b.id,
-      startHour: b.startHour,
-      startMinute: b.startMinute,
-      endHour: b.endHour,
-      endMinute: b.endMinute,
-      activityId: b.activityId,
-    })),
+    blocksByDay,
+    followingIds,
     ...(pulse ? { pulse: { activityId: pulse.activityId, at: pulse.at } } : {}),
     ...(onboarded ? { onboarded: true } : {}),
   };
@@ -64,11 +110,20 @@ function toStored(
 
 export function ScheduleProvider({ children }: { children: ReactNode }) {
   const [profile, setProfileState] = useState<Profile>(defaultProfile);
-  const [blocks, setBlocks] = useState<TimeBlock[]>([]);
+  const [scheduleByDay, setScheduleByDay] = useState<Record<string, TimeBlock[]>>({});
+  const [followingIds, setFollowingIds] = useState<string[]>([]);
   const [pulse, setPulseState] = useState<Pulse | null>(null);
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [tick, setTick] = useState(0);
   const skipSave = useRef(true);
+
+  const todayKey = useMemo(() => isoDate(new Date()), [tick]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const s = loadState();
@@ -79,14 +134,20 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         avatarEmoji: s.profile.avatarEmoji,
       });
     }
-    if (Array.isArray(s?.blocks)) {
-      setBlocks(
-        s.blocks.map((b) => ({
-          ...b,
-          activityId: b.activityId as ActivityId,
-        })),
-      );
+
+    if (s?.blocksByDay && typeof s.blocksByDay === "object") {
+      const mapped: Record<string, TimeBlock[]> = {};
+      for (const [day, list] of Object.entries(s.blocksByDay)) {
+        if (Array.isArray(list)) mapped[day] = list.map(fromStoredBlock);
+      }
+      setScheduleByDay(mapped);
+    } else if (Array.isArray(s?.blocks)) {
+      const migrated = s.blocks.map(fromStoredBlock);
+      setScheduleByDay({ [isoDate(new Date())]: migrated });
     }
+
+    if (Array.isArray(s?.followingIds)) setFollowingIds(s.followingIds);
+
     if (s?.pulse) {
       setPulseState({
         activityId: s.pulse.activityId as ActivityId,
@@ -106,8 +167,21 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       skipSave.current = false;
       return;
     }
-    saveState(toStored(profile, blocks, pulse, onboardingDone));
-  }, [hydrated, profile, blocks, pulse, onboardingDone]);
+    saveState(toStored(profile, scheduleByDay, followingIds, pulse, onboardingDone));
+  }, [hydrated, profile, scheduleByDay, followingIds, pulse, onboardingDone]);
+
+  const updateToday = useCallback(
+    (fn: (prev: TimeBlock[]) => TimeBlock[]) => {
+      setScheduleByDay((prev) => {
+        const key = isoDate(new Date());
+        const cur = prev[key] ?? [];
+        return { ...prev, [key]: sortBlocks(fn(cur)) };
+      });
+    },
+    [],
+  );
+
+  const blocks = scheduleByDay[todayKey] ?? [];
 
   const setProfile = useCallback((p: Partial<Profile>) => {
     setProfileState((prev) => ({ ...prev, ...p }));
@@ -115,16 +189,42 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
 
   const addBlock = useCallback((b: Omit<TimeBlock, "id">) => {
     const block: TimeBlock = { ...b, id: newId() };
-    setBlocks((prev) => sortBlocks([...prev, block]));
+    updateToday((prev) => [...prev, block]);
+  }, [updateToday]);
+
+  const updateBlock = useCallback(
+    (id: string, patch: Partial<Omit<TimeBlock, "id">>) => {
+      updateToday((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    },
+    [updateToday],
+  );
+
+  const removeBlock = useCallback(
+    (id: string) => {
+      updateToday((prev) => prev.filter((x) => x.id !== id));
+    },
+    [updateToday],
+  );
+
+  const setBlockOutcome = useCallback(
+    (id: string, outcome: BlockOutcome) => {
+      updateToday((prev) => prev.map((x) => (x.id === id ? { ...x, outcome } : x)));
+    },
+    [updateToday],
+  );
+
+  const toggleFollow = useCallback((friendId: string) => {
+    setFollowingIds((prev) =>
+      prev.includes(friendId) ? prev.filter((x) => x !== friendId) : [...prev, friendId],
+    );
   }, []);
 
-  const updateBlock = useCallback((id: string, patch: Partial<Omit<TimeBlock, "id">>) => {
-    setBlocks((prev) => sortBlocks(prev.map((x) => (x.id === id ? { ...x, ...patch } : x))));
-  }, []);
+  const isFollowing = useCallback(
+    (friendId: string) => followingIds.includes(friendId),
+    [followingIds],
+  );
 
-  const removeBlock = useCallback((id: string) => {
-    setBlocks((prev) => prev.filter((x) => x.id !== id));
-  }, []);
+  const getFriend = useCallback((id: string) => DEMO_FRIENDS.find((f) => f.id === id), []);
 
   const setPulse = useCallback((activityId: ActivityId) => {
     setPulseState({ activityId, at: Date.now() });
@@ -140,12 +240,21 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(
     () => ({
+      tick,
       profile,
       setProfile,
       blocks,
+      scheduleByDay,
       addBlock,
       updateBlock,
       removeBlock,
+      setBlockOutcome,
+      followingIds,
+      toggleFollow,
+      isFollowing,
+      friends: DEMO_FRIENDS,
+      getFriend,
+      celebrities: CELEBRITY_ARCHETYPES,
       pulse,
       setPulse,
       clearPulse,
@@ -153,12 +262,19 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       finishOnboarding,
     }),
     [
+      tick,
       profile,
       setProfile,
       blocks,
+      scheduleByDay,
       addBlock,
       updateBlock,
       removeBlock,
+      setBlockOutcome,
+      followingIds,
+      toggleFollow,
+      isFollowing,
+      getFriend,
       pulse,
       setPulse,
       clearPulse,
