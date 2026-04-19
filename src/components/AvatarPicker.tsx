@@ -1,9 +1,10 @@
-import { useId, useRef, useState } from "react";
-import { ImagePlus, Trash2 } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
 import { ANIMAL_AVATARS, type AnimalAvatarId } from "../data/avatarAnimals";
 import type { AvatarFields } from "../types";
 import { compressImageToDataUrl } from "../lib/avatarImage";
 import { AvatarDisplay } from "./AvatarDisplay";
+import { PhotoLightbox } from "./PhotoLightbox";
 
 const MARKS = ["◆", "◇", "◎", "✶", "⌁", "☽", "○"];
 
@@ -19,6 +20,11 @@ export function AvatarPicker({ value, onChange, layout = "compact" }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [zoomOpen, setZoomOpen] = useState(false);
+
+  useEffect(() => {
+    if (!value.avatarImageDataUrl) setZoomOpen(false);
+  }, [value.avatarImageDataUrl]);
 
   const pickImage = async (file: File | null) => {
     if (!file) return;
@@ -41,6 +47,7 @@ export function AvatarPicker({ value, onChange, layout = "compact" }: Props) {
 
   const clearImage = () => {
     setErr(null);
+    setZoomOpen(false);
     onChange({
       avatarImageDataUrl: null,
       avatarAnimalId: value.avatarAnimalId,
@@ -67,34 +74,62 @@ export function AvatarPicker({ value, onChange, layout = "compact" }: Props) {
   };
 
   const wrap = layout === "comfortable" ? "avatar-picker avatar-picker--comfortable" : "avatar-picker";
+  const hasPhoto = Boolean(value.avatarImageDataUrl);
 
   return (
     <div className={wrap}>
       <div className="avatar-picker__preview">
-        <AvatarDisplay source={value} size="lg" />
+        <div className="avatar-picker__preview-wrap">
+          <input
+            ref={fileRef}
+            id={inputId}
+            type="file"
+            accept="image/*"
+            className="avatar-picker__file"
+            onChange={(e) => pickImage(e.target.files?.[0] ?? null)}
+          />
+
+          {hasPhoto ? (
+            <button
+              type="button"
+              className="avatar-picker__photo-hit"
+              onClick={() => setZoomOpen(true)}
+              aria-label="View profile photo full size"
+            >
+              <AvatarDisplay source={value} size="lg" />
+            </button>
+          ) : (
+            <div className="avatar-picker__photo-hit avatar-picker__photo-hit--static" aria-hidden>
+              <AvatarDisplay source={value} size="lg" />
+            </div>
+          )}
+
+          <label
+            htmlFor={inputId}
+            className={`avatar-picker__plus-fab ${busy ? "avatar-picker__plus-fab--busy" : ""}`}
+            title={hasPhoto ? "Change photo" : "Add photo"}
+            aria-label={hasPhoto ? "Change profile photo" : "Add profile photo"}
+          >
+            <Plus size={22} strokeWidth={2.5} aria-hidden />
+          </label>
+        </div>
       </div>
 
-      <div className="avatar-picker__row">
-        <input
-          ref={fileRef}
-          id={inputId}
-          type="file"
-          accept="image/*"
-          className="avatar-picker__file"
-          onChange={(e) => pickImage(e.target.files?.[0] ?? null)}
-        />
-        <label htmlFor={inputId} className="btn btn--outline avatar-picker__upload">
-          <ImagePlus size={18} strokeWidth={2} aria-hidden />
-          {busy ? "Working…" : "Upload photo"}
-        </label>
-        {value.avatarImageDataUrl ? (
+      {hasPhoto && value.avatarImageDataUrl ? (
+        <PhotoLightbox src={value.avatarImageDataUrl} open={zoomOpen} onClose={() => setZoomOpen(false)} />
+      ) : null}
+
+      <div className="avatar-picker__actions">
+        {hasPhoto ? (
           <button type="button" className="btn btn--ghost avatar-picker__remove" onClick={clearImage}>
             <Trash2 size={18} strokeWidth={2} aria-hidden />
-            Remove
+            Remove photo
           </button>
         ) : null}
+        {busy ? <span className="avatar-picker__busy">Updating…</span> : null}
       </div>
-      <p className="avatar-picker__hint">Photos are cropped and saved on this device only.</p>
+
+      <p className="avatar-picker__hint">Tap + to add a photo. Tap your picture to view it full screen.</p>
       {err ? <p className="avatar-picker__err">{err}</p> : null}
 
       <p className="avatar-picker__label">Animals</p>

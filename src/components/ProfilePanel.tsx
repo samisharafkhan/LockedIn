@@ -1,17 +1,112 @@
-import { useEffect, useMemo, useState } from "react";
-import { LogOut, X } from "lucide-react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  ArrowLeft,
+  Bell,
+  ChevronRight,
+  Database,
+  HelpCircle,
+  Info,
+  LogOut,
+  Settings,
+  Shield,
+  UserRound,
+  X,
+} from "lucide-react";
 import { activityById } from "../data/activities";
 import { DEMO_FOLLOWERS } from "../data/demoFollowers";
 import { useSchedule } from "../context/ScheduleContext";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { AvatarPicker } from "./AvatarPicker";
+import { PhotoLightbox } from "./PhotoLightbox";
 import { PulsePanel } from "./PulsePanel";
 import { ActivityIcon } from "./ActivityIcon";
 import { hoursByActivityLastNDays, hoursForActivityOnDay } from "../lib/weekStats";
 import { lastNDayKeys, weekdayShort } from "../lib/dates";
+import { loadMePrefs, ME_PREFS_KEY, saveMePrefs, type MePrefs } from "../lib/mePrefs";
+import { APP_VERSION } from "../version";
 import type { ActivityId, AvatarFields } from "../types";
+import type { LucideIcon } from "lucide-react";
 
 type StatSheet = "following" | "followers" | "pulse" | null;
+
+type MeScreen =
+  | "profile"
+  | "settings"
+  | "edit-profile"
+  | "notifications"
+  | "privacy"
+  | "data"
+  | "help"
+  | "about";
+
+function MeScreenHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <header className="me-screen-head">
+      <button type="button" className="icon-btn me-screen-head__back" onClick={onBack} aria-label="Back">
+        <ArrowLeft size={22} strokeWidth={2} />
+      </button>
+      <h2 className="me-screen-head__title">{title}</h2>
+      <span className="me-screen-head__spacer" aria-hidden />
+    </header>
+  );
+}
+
+function SettingsNavRow({
+  Icon,
+  title,
+  subtitle,
+  onClick,
+}: {
+  Icon: LucideIcon;
+  title: string;
+  subtitle?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="me-settings-row" onClick={onClick}>
+      <span className="me-settings-row__left">
+        <span className="me-settings-row__icon" aria-hidden>
+          <Icon size={20} strokeWidth={2} />
+        </span>
+        <span className="me-settings-row__textblock">
+          <span className="me-settings-row__title">{title}</span>
+          {subtitle ? <span className="me-settings-row__sub">{subtitle}</span> : null}
+        </span>
+      </span>
+      <ChevronRight size={20} strokeWidth={2} className="me-settings-row__chev" aria-hidden />
+    </button>
+  );
+}
+
+function ToggleRow({
+  title,
+  description,
+  checked,
+  onChange,
+}: {
+  title: string;
+  description: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  const id = useId();
+  return (
+    <label className="me-toggle" htmlFor={id}>
+      <span className="me-toggle__copy">
+        <span className="me-toggle__title">{title}</span>
+        <span className="me-toggle__desc">{description}</span>
+      </span>
+      <input
+        id={id}
+        type="checkbox"
+        className="me-toggle__input"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="me-toggle__ui" aria-hidden />
+    </label>
+  );
+}
 
 export function ProfilePanel() {
   const {
@@ -23,6 +118,7 @@ export function ProfilePanel() {
     clearPulse,
     getFriend,
   } = useSchedule();
+  const [meScreen, setMeScreen] = useState<MeScreen>("profile");
   const [showReset, setShowReset] = useState(false);
   const [name, setName] = useState(profile.displayName);
   const [avatar, setAvatar] = useState<AvatarFields>({
@@ -32,6 +128,8 @@ export function ProfilePanel() {
   });
   const [metric, setMetric] = useState<ActivityId | null>(null);
   const [statSheet, setStatSheet] = useState<StatSheet>(null);
+  const [heroPhotoOpen, setHeroPhotoOpen] = useState(false);
+  const [mePrefs, setMePrefs] = useState<MePrefs>(() => loadMePrefs());
 
   useEffect(() => {
     setName(profile.displayName);
@@ -41,6 +139,18 @@ export function ProfilePanel() {
       avatarImageDataUrl: profile.avatarImageDataUrl ?? null,
     });
   }, [profile.displayName, profile.avatarEmoji, profile.avatarAnimalId, profile.avatarImageDataUrl]);
+
+  useEffect(() => {
+    if (!avatar.avatarImageDataUrl) setHeroPhotoOpen(false);
+  }, [avatar.avatarImageDataUrl]);
+
+  const patchPrefs = (patch: Partial<MePrefs>) => {
+    setMePrefs((prev) => {
+      const next = { ...prev, ...patch };
+      saveMePrefs(next);
+      return next;
+    });
+  };
 
   const totals = useMemo(() => hoursByActivityLastNDays(scheduleByDay, 7), [scheduleByDay]);
 
@@ -101,15 +211,39 @@ export function ProfilePanel() {
 
   const resetLocal = () => {
     localStorage.removeItem("lockedin:v1");
+    localStorage.removeItem(ME_PREFS_KEY);
     window.location.reload();
   };
 
-  return (
-    <section className="profile" aria-labelledby="profile-heading">
+  const profileMain = (
+    <>
+      <div className="profile__topbar">
+        <p className="profile__topbar-label">You</p>
+        <button
+          type="button"
+          className="icon-btn profile__settings-gear"
+          onClick={() => setMeScreen("settings")}
+          aria-label="Open settings"
+        >
+          <Settings size={22} strokeWidth={2} />
+        </button>
+      </div>
+
       <div className="profile__hero">
-        <div className="profile__avatar" aria-hidden>
-          <AvatarDisplay source={avatar} size="lg" />
-        </div>
+        {avatar.avatarImageDataUrl ? (
+          <button
+            type="button"
+            className="profile__avatar"
+            onClick={() => setHeroPhotoOpen(true)}
+            aria-label="View profile photo full size"
+          >
+            <AvatarDisplay source={avatar} size="lg" />
+          </button>
+        ) : (
+          <div className="profile__avatar" aria-hidden>
+            <AvatarDisplay source={avatar} size="lg" />
+          </div>
+        )}
         <div className="profile__hero-text">
           <h2 id="profile-heading" className="profile__name">
             {profile.displayName}
@@ -166,9 +300,71 @@ export function ProfilePanel() {
         <h3 className="profile__h3">Now</h3>
         <PulsePanel embedded />
       </div>
+    </>
+  );
 
-      <div className="me__card">
-        <h3 className="me__card-title">Edit profile</h3>
+  const settingsHome = (
+    <>
+      <MeScreenHeader title="Settings" onBack={() => setMeScreen("profile")} />
+
+      <p className="me-settings-lede">Account, preferences, and device data for this offline demo.</p>
+
+      <div className="me-settings-group">
+        <p className="me-settings-group__label">Account</p>
+        <div className="me-settings-card">
+          <SettingsNavRow
+            Icon={UserRound}
+            title="Edit profile"
+            subtitle="Name, photo, avatar"
+            onClick={() => setMeScreen("edit-profile")}
+          />
+        </div>
+      </div>
+
+      <div className="me-settings-group">
+        <p className="me-settings-group__label">How you use LockedIn</p>
+        <div className="me-settings-card">
+          <SettingsNavRow
+            Icon={Bell}
+            title="Notifications"
+            subtitle="Tips and reminders (on this device)"
+            onClick={() => setMeScreen("notifications")}
+          />
+          <SettingsNavRow
+            Icon={Shield}
+            title="Privacy"
+            subtitle="Local data · demo mode"
+            onClick={() => setMeScreen("privacy")}
+          />
+        </div>
+      </div>
+
+      <div className="me-settings-group">
+        <p className="me-settings-group__label">Support</p>
+        <div className="me-settings-card">
+          <SettingsNavRow Icon={HelpCircle} title="Help" subtitle="How tabs work" onClick={() => setMeScreen("help")} />
+          <SettingsNavRow Icon={Info} title="About" subtitle={`Version ${APP_VERSION}`} onClick={() => setMeScreen("about")} />
+        </div>
+      </div>
+
+      <div className="me-settings-group">
+        <p className="me-settings-group__label">More</p>
+        <div className="me-settings-card">
+          <SettingsNavRow
+            Icon={Database}
+            title="Data on this device"
+            subtitle="Reset schedules and profile"
+            onClick={() => setMeScreen("data")}
+          />
+        </div>
+      </div>
+    </>
+  );
+
+  const editProfileScreen = (
+    <>
+      <MeScreenHeader title="Edit profile" onBack={() => setMeScreen("settings")} />
+      <div className="me__card me__card--flush">
         <label className="me__field">
           <span>Display name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} maxLength={24} />
@@ -178,11 +374,61 @@ export function ProfilePanel() {
           Save profile
         </button>
       </div>
+    </>
+  );
 
-      <div className="me__card">
-        <h3 className="me__card-title">Data on this device</h3>
-        <p className="me__card-body">
-          Schedules, follows, and pulses stay in this browser until you reset.
+  const notificationsScreen = (
+    <>
+      <MeScreenHeader title="Notifications" onBack={() => setMeScreen("settings")} />
+      <p className="me-settings-lede">These options are saved in your browser only. They do not connect to a server.</p>
+      <div className="me-settings-card me-settings-card--toggles">
+        <ToggleRow
+          title="In-app tips"
+          description="Short hints when exploring Build, Friends, and Stars."
+          checked={mePrefs.tipsInApp}
+          onChange={(v) => patchPrefs({ tipsInApp: v })}
+        />
+        <ToggleRow
+          title="Block reminders"
+          description="Gentle nudges about sticking to saved day blocks."
+          checked={mePrefs.blockReminders}
+          onChange={(v) => patchPrefs({ blockReminders: v })}
+        />
+        <ToggleRow
+          title="Activity status"
+          description="Show an “active now” style cue in the Friends demo list."
+          checked={mePrefs.activityStatus}
+          onChange={(v) => patchPrefs({ activityStatus: v })}
+        />
+      </div>
+    </>
+  );
+
+  const privacyScreen = (
+    <>
+      <MeScreenHeader title="Privacy" onBack={() => setMeScreen("settings")} />
+      <div className="me__card me__card--flush">
+        <p className="me-settings-prose">
+          LockedIn keeps your schedule, follows, pulse, and profile in this browser. Nothing is uploaded to a LockedIn
+          server in this demo.
+        </p>
+        <p className="me-settings-prose">
+          Friends and “Stars” are sample data for layout and flows. Do not enter sensitive personal information you would
+          not store in normal site storage.
+        </p>
+        <p className="me-settings-prose me-settings-prose--muted">
+          You can clear everything anytime from Settings → Data on this device.
+        </p>
+      </div>
+    </>
+  );
+
+  const dataScreen = (
+    <>
+      <MeScreenHeader title="Data on this device" onBack={() => setMeScreen("settings")} />
+      <div className="me__card me__card--flush">
+        <p className="me__card-body" style={{ marginTop: 0 }}>
+          Schedules, follows, pulses, profile, and notification preferences stay in this browser until you reset.
         </p>
         {!showReset ? (
           <button type="button" className="btn btn--outline" onClick={() => setShowReset(true)}>
@@ -190,7 +436,7 @@ export function ProfilePanel() {
           </button>
         ) : (
           <div className="me__confirm">
-            <p className="me__warn">This clears your schedule, follows, pulse, and profile.</p>
+            <p className="me__warn">This clears your schedule, follows, pulse, profile, and settings preferences.</p>
             <div className="me__confirm-row">
               <button type="button" className="btn btn--ghost" onClick={() => setShowReset(false)}>
                 Cancel
@@ -203,6 +449,58 @@ export function ProfilePanel() {
           </div>
         )}
       </div>
+    </>
+  );
+
+  const helpScreen = (
+    <>
+      <MeScreenHeader title="Help" onBack={() => setMeScreen("settings")} />
+      <div className="me__card me__card--flush">
+        <ul className="me-help-list">
+          <li>
+            <strong>Build</strong> — Plan hours on the calendar; totals feed your You tab.
+          </li>
+          <li>
+            <strong>Friends</strong> — Follow demo people and compare rhythms (offline sample).
+          </li>
+          <li>
+            <strong>Stars</strong> — Borrow energy from public arcs (illustrative templates, not endorsements).
+          </li>
+          <li>
+            <strong>You</strong> — Profile, weekly recap, pulse, and settings (gear icon).
+          </li>
+        </ul>
+      </div>
+    </>
+  );
+
+  const aboutScreen = (
+    <>
+      <MeScreenHeader title="About" onBack={() => setMeScreen("settings")} />
+      <div className="me__card me__card--flush">
+        <p className="me-about-name">LockedIn</p>
+        <p className="me-about-version">Version {APP_VERSION}</p>
+        <p className="me-settings-prose">
+          A local-first day planner demo built with React and Vite. Profile photos and schedules never leave your device
+          unless you export or reset.
+        </p>
+      </div>
+    </>
+  );
+
+  let body: ReactNode = null;
+  if (meScreen === "profile") body = profileMain;
+  else if (meScreen === "settings") body = settingsHome;
+  else if (meScreen === "edit-profile") body = editProfileScreen;
+  else if (meScreen === "notifications") body = notificationsScreen;
+  else if (meScreen === "privacy") body = privacyScreen;
+  else if (meScreen === "data") body = dataScreen;
+  else if (meScreen === "help") body = helpScreen;
+  else if (meScreen === "about") body = aboutScreen;
+
+  return (
+    <section className="profile" aria-labelledby={meScreen === "profile" ? "profile-heading" : undefined}>
+      {body}
 
       {statSheet === "following" ? (
         <div className="modal" role="dialog" aria-modal="true" aria-labelledby="following-title">
@@ -333,6 +631,14 @@ export function ProfilePanel() {
             )}
           </div>
         </div>
+      ) : null}
+
+      {avatar.avatarImageDataUrl ? (
+        <PhotoLightbox
+          src={avatar.avatarImageDataUrl}
+          open={heroPhotoOpen}
+          onClose={() => setHeroPhotoOpen(false)}
+        />
       ) : null}
 
       {metric ? (
