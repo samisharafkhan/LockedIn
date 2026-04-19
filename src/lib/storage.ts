@@ -11,7 +11,13 @@ export type StoredBlock = {
 };
 
 export type StoredState = {
-  profile: { handle: string; displayName: string; avatarEmoji: string };
+  profile: {
+    handle: string;
+    displayName: string;
+    avatarEmoji: string;
+    avatarImageDataUrl?: string | null;
+    avatarAnimalId?: string | null;
+  };
   /** @deprecated migrated into blocksByDay */
   blocks?: StoredBlock[];
   blocksByDay?: Record<string, StoredBlock[]>;

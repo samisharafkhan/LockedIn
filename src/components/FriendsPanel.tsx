@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, UserPlus, UserMinus } from "lucide-react";
 import { activityById } from "../data/activities";
+import { AvatarDisplay } from "./AvatarDisplay";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
 import { blockEndMinutesExclusive, blockStartMinutes } from "../lib/scheduleBlocks";
@@ -65,7 +66,7 @@ export function FriendsPanel() {
           </p>
         </div>
         <div className="avatar-ring" aria-hidden>
-          <span className="avatar-ring__glyph">{profile.avatarEmoji}</span>
+          <AvatarDisplay source={profile} size="md" />
         </div>
       </div>
 

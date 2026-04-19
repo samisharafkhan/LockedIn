@@ -5,6 +5,7 @@ import { FriendsPanel } from "./components/FriendsPanel";
 import { Onboarding } from "./components/Onboarding";
 import { ProfilePanel } from "./components/ProfilePanel";
 import { SchedulePanel } from "./components/SchedulePanel";
+import { AvatarDisplay } from "./components/AvatarDisplay";
 import { ScheduleProvider, useSchedule } from "./context/ScheduleContext";
 
 function Shell() {
@@ -23,9 +24,9 @@ function Shell() {
           <p className="top__tag">Build your day, line up with friends, borrow energy from public arcs.</p>
         </div>
         <div className="top__user">
-          <span className="top__emoji" aria-hidden>
-            {profile.avatarEmoji}
-          </span>
+          <div className="top__avatar-wrap" aria-hidden>
+            <AvatarDisplay source={profile} size="sm" />
+          </div>
           <div>
             <p className="top__name">{profile.displayName}</p>
             <p className="top__handle">@{profile.handle}</p>

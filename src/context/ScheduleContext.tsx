@@ -45,6 +45,8 @@ const defaultProfile: Profile = {
   handle: "you",
   displayName: "You",
   avatarEmoji: "◆",
+  avatarImageDataUrl: null,
+  avatarAnimalId: null,
 };
 
 function newId() {
@@ -132,6 +134,8 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         handle: s.profile.handle,
         displayName: s.profile.displayName,
         avatarEmoji: s.profile.avatarEmoji,
+        avatarImageDataUrl: s.profile.avatarImageDataUrl ?? null,
+        avatarAnimalId: s.profile.avatarAnimalId ?? null,
       });
     }
 

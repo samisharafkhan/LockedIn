@@ -3,13 +3,13 @@ import { LogOut, X } from "lucide-react";
 import { activityById } from "../data/activities";
 import { DEMO_FOLLOWERS } from "../data/demoFollowers";
 import { useSchedule } from "../context/ScheduleContext";
+import { AvatarDisplay } from "./AvatarDisplay";
+import { AvatarPicker } from "./AvatarPicker";
 import { PulsePanel } from "./PulsePanel";
 import { ActivityIcon } from "./ActivityIcon";
 import { hoursByActivityLastNDays, hoursForActivityOnDay } from "../lib/weekStats";
 import { lastNDayKeys, weekdayShort } from "../lib/dates";
-import type { ActivityId } from "../types";
-
-const MARKS = ["◆", "◇", "◎", "✶", "⌁", "☽", "○"];
+import type { ActivityId, AvatarFields } from "../types";
 
 type StatSheet = "following" | "followers" | "pulse" | null;
 
@@ -25,14 +25,22 @@ export function ProfilePanel() {
   } = useSchedule();
   const [showReset, setShowReset] = useState(false);
   const [name, setName] = useState(profile.displayName);
-  const [mark, setMark] = useState(profile.avatarEmoji);
+  const [avatar, setAvatar] = useState<AvatarFields>({
+    avatarEmoji: profile.avatarEmoji,
+    avatarAnimalId: profile.avatarAnimalId ?? null,
+    avatarImageDataUrl: profile.avatarImageDataUrl ?? null,
+  });
   const [metric, setMetric] = useState<ActivityId | null>(null);
   const [statSheet, setStatSheet] = useState<StatSheet>(null);
 
   useEffect(() => {
     setName(profile.displayName);
-    setMark(profile.avatarEmoji);
-  }, [profile.displayName, profile.avatarEmoji]);
+    setAvatar({
+      avatarEmoji: profile.avatarEmoji,
+      avatarAnimalId: profile.avatarAnimalId ?? null,
+      avatarImageDataUrl: profile.avatarImageDataUrl ?? null,
+    });
+  }, [profile.displayName, profile.avatarEmoji, profile.avatarAnimalId, profile.avatarImageDataUrl]);
 
   const totals = useMemo(() => hoursByActivityLastNDays(scheduleByDay, 7), [scheduleByDay]);
 
@@ -88,7 +96,7 @@ export function ProfilePanel() {
   const saveProfile = () => {
     const trimmed = name.trim() || profile.displayName;
     const handle = trimmed.toLowerCase().replace(/\s+/g, "") || profile.handle;
-    setProfile({ displayName: trimmed, handle, avatarEmoji: mark });
+    setProfile({ displayName: trimmed, handle, ...avatar });
   };
 
   const resetLocal = () => {
@@ -100,7 +108,7 @@ export function ProfilePanel() {
     <section className="profile" aria-labelledby="profile-heading">
       <div className="profile__hero">
         <div className="profile__avatar" aria-hidden>
-          {profile.avatarEmoji}
+          <AvatarDisplay source={avatar} size="lg" />
         </div>
         <div className="profile__hero-text">
           <h2 id="profile-heading" className="profile__name">
@@ -165,20 +173,7 @@ export function ProfilePanel() {
           <span>Display name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} maxLength={24} />
         </label>
-        <p className="me__field-label">Mark</p>
-        <div className="me__marks" role="listbox" aria-label="Avatar mark">
-          {MARKS.map((m) => (
-            <button
-              key={m}
-              type="button"
-              className={`me__mark ${m === mark ? "me__mark--on" : ""}`}
-              onClick={() => setMark(m)}
-              aria-pressed={m === mark}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <AvatarPicker value={avatar} onChange={setAvatar} layout="comfortable" />
         <button type="button" className="btn btn--primary me__save" onClick={saveProfile}>
           Save profile
         </button>

@@ -1,4 +1,5 @@
 import { ACTIVITIES, activityById } from "../data/activities";
+import { AvatarDisplay } from "./AvatarDisplay";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
 
@@ -35,7 +36,7 @@ export function PulsePanel({ embedded }: Props) {
             </p>
           </div>
           <div className="avatar-ring" aria-hidden>
-            <span className="avatar-ring__glyph">{profile.avatarEmoji}</span>
+            <AvatarDisplay source={profile} size="md" />
           </div>
         </div>
       ) : (

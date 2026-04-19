@@ -1,12 +1,16 @@
 import { useState } from "react";
+import { AvatarPicker } from "./AvatarPicker";
 import { useSchedule } from "../context/ScheduleContext";
-
-const MARKS = ["◆", "◇", "◎", "✶", "⌁", "☽", "○"];
+import type { AvatarFields } from "../types";
 
 export function Onboarding() {
   const { setProfile, finishOnboarding } = useSchedule();
   const [name, setName] = useState("");
-  const [mark, setMark] = useState("◆");
+  const [avatar, setAvatar] = useState<AvatarFields>({
+    avatarEmoji: "◆",
+    avatarAnimalId: null,
+    avatarImageDataUrl: null,
+  });
 
   const go = () => {
     const trimmed = name.trim() || "Friend";
@@ -14,7 +18,7 @@ export function Onboarding() {
     setProfile({
       displayName: trimmed,
       handle,
-      avatarEmoji: mark,
+      ...avatar,
     });
     finishOnboarding();
   };
@@ -25,7 +29,7 @@ export function Onboarding() {
         <p className="eyebrow eyebrow--dark">LockedIn</p>
         <h1 className="onboard__title">Let’s set you up</h1>
         <p className="onboard__lede">
-          You’ll build your own day — no fake people, no mystery icons. This takes a few taps.
+          Add a photo, pick a minimal animal, or keep a symbol — same vibe as the rest of the app.
         </p>
         <label className="field">
           <span className="field__label">Display name</span>
@@ -38,22 +42,7 @@ export function Onboarding() {
             autoFocus
           />
         </label>
-        <div className="field">
-          <span className="field__label">Mark</span>
-          <div className="emoji-row" role="listbox" aria-label="Choose avatar mark">
-            {MARKS.map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`emoji-chip ${m === mark ? "emoji-chip--on" : ""}`}
-                onClick={() => setMark(m)}
-                aria-pressed={m === mark}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        </div>
+        <AvatarPicker value={avatar} onChange={setAvatar} layout="comfortable" />
         <button type="button" className="btn btn--primary btn--wide" onClick={go}>
           Continue
         </button>

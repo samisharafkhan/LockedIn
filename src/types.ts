@@ -34,10 +34,16 @@ export type Pulse = {
   at: number;
 };
 
-export type Profile = {
+/** Avatar-only fields (photo, animal icon, or symbol) */
+export type AvatarFields = {
+  avatarEmoji: string;
+  avatarImageDataUrl?: string | null;
+  avatarAnimalId?: string | null;
+};
+
+export type Profile = AvatarFields & {
   handle: string;
   displayName: string;
-  avatarEmoji: string;
 };
 
 export type PublicPerson = {
