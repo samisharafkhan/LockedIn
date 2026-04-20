@@ -2706,6 +2706,109 @@ button.profile__avatar:focus-visible {
   }
 }
 
+/* —— Auth & language onboarding —— */
+.auth-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px 32px;
+  background: var(--bg);
+}
+
+.auth-option-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-option-stack .onboard__google {
+  margin-bottom: 0;
+}
+
+.auth-option-stack .onboard__or {
+  margin: 4px 0 4px;
+}
+
+.auth-switch {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.auth-switch a {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.auth-back {
+  display: block;
+  margin-top: 16px;
+  text-align: center;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.auth-link-btn {
+  margin-top: 8px;
+}
+
+.onboard__card--wide {
+  width: min(480px, 100%);
+}
+
+.language-grid {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.language-card {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  padding: 14px 12px;
+  background: var(--surface-2);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.language-card--on {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.language-card__native {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.language-card__label {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
+.recaptcha-host {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.01;
+}
+
 @media (max-width: 380px) {
   .time-grid {
     grid-template-columns: 1fr;

@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Bell,
@@ -6,6 +7,7 @@ import {
   Database,
   HelpCircle,
   Info,
+  Globe,
   LogOut,
   Settings,
   Shield,
@@ -118,8 +120,10 @@ export function ProfilePanel() {
     clearPulse,
     getFriend,
     firebaseUser,
-    signOutGoogle,
+    signOutAuth,
+    t,
   } = useSchedule();
+  const navigate = useNavigate();
   const [meScreen, setMeScreen] = useState<MeScreen>("profile");
   const [showReset, setShowReset] = useState(false);
   const [name, setName] = useState(profile.displayName);
@@ -212,6 +216,7 @@ export function ProfilePanel() {
   };
 
   const resetLocal = () => {
+    void signOutAuth().catch(() => {});
     localStorage.removeItem("lockedin:v1");
     localStorage.removeItem(ME_PREFS_KEY);
     window.location.reload();
@@ -320,20 +325,26 @@ export function ProfilePanel() {
             subtitle="Name, photo, avatar"
             onClick={() => setMeScreen("edit-profile")}
           />
+          <SettingsNavRow
+            Icon={Globe}
+            title={t("settings_language")}
+            subtitle={t("settings_language_sub")}
+            onClick={() => navigate("/language?from=settings")}
+          />
           {firebaseUser ? (
             <button
               type="button"
               className="me-settings-row"
-              onClick={() => void signOutGoogle()}
+              onClick={() => void signOutAuth()}
             >
               <span className="me-settings-row__left">
                 <span className="me-settings-row__icon" aria-hidden>
                   <LogOut size={20} strokeWidth={2} />
                 </span>
                 <span className="me-settings-row__textblock">
-                  <span className="me-settings-row__title">Sign out of Google</span>
+                  <span className="me-settings-row__title">{t("settings_sign_out_google")}</span>
                   <span className="me-settings-row__sub">
-                    {firebaseUser.email ?? firebaseUser.displayName ?? "Signed-in session"}
+                    {firebaseUser.email ?? firebaseUser.displayName ?? t("settings_google_session")}
                   </span>
                 </span>
               </span>

@@ -1,11 +1,13 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AvatarPicker } from "./AvatarPicker";
 import { useSchedule } from "../context/ScheduleContext";
 import { isFirebaseAuthConfigured } from "../lib/firebaseApp";
 import type { AvatarFields } from "../types";
 
 export function Onboarding() {
-  const { setProfile, finishOnboarding, signInWithGoogle } = useSchedule();
+  const { setProfile, finishOnboarding, signInWithGoogle, t } = useSchedule();
+  const navigate = useNavigate();
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState<AvatarFields>({
     avatarEmoji: "◆",
@@ -24,6 +26,7 @@ export function Onboarding() {
       ...avatar,
     });
     finishOnboarding();
+    navigate("/", { replace: true });
   };
 
   const google = async () => {
@@ -32,7 +35,7 @@ export function Onboarding() {
     try {
       await signInWithGoogle();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Could not sign in with Google.";
+      const msg = e instanceof Error ? e.message : t("err_generic");
       setGoogleErr(msg);
     } finally {
       setGoogleBusy(false);
@@ -42,11 +45,9 @@ export function Onboarding() {
   return (
     <div className="onboard">
       <div className="onboard__card">
-        <p className="eyebrow eyebrow--dark">LockedIn</p>
-        <h1 className="onboard__title">Let’s set you up</h1>
-        <p className="onboard__lede">
-          Add a photo, pick a minimal animal, or keep a symbol — same vibe as the rest of the app.
-        </p>
+        <p className="eyebrow eyebrow--dark">{t("welcome_eyebrow")}</p>
+        <h1 className="onboard__title">{t("onboard_title")}</h1>
+        <p className="onboard__lede">{t("onboard_lede")}</p>
         {isFirebaseAuthConfigured() ? (
           <>
             <button
@@ -55,31 +56,28 @@ export function Onboarding() {
               onClick={() => void google()}
               disabled={googleBusy}
             >
-              {googleBusy ? "Opening Google…" : "Continue with Google"}
+              {googleBusy ? t("onboard_google_loading") : t("onboard_google")}
             </button>
             {googleErr ? <p className="onboard__err">{googleErr}</p> : null}
-            <p className="onboard__or">or set up locally</p>
+            <p className="onboard__or">{t("onboard_or")}</p>
           </>
         ) : (
-          <p className="onboard__hint">
-            Optional: add <code className="onboard__code">VITE_FIREBASE_*</code> keys to enable Google sign-in on
-            this host.
-          </p>
+          <p className="onboard__hint">{t("onboard_hint_env")}</p>
         )}
         <label className="field">
-          <span className="field__label">Display name</span>
+          <span className="field__label">{t("onboard_name_label")}</span>
           <input
             className="field__input"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Alex"
+            placeholder={t("onboard_placeholder")}
             maxLength={24}
             autoFocus
           />
         </label>
         <AvatarPicker value={avatar} onChange={setAvatar} layout="comfortable" />
         <button type="button" className="btn btn--primary btn--wide" onClick={go}>
-          Continue
+          {t("onboard_continue")}
         </button>
       </div>
     </div>

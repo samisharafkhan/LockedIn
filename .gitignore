@@ -1,6 +1,12 @@
 node_modules
 dist
 *.local
+
+# Environment variables — never commit real Firebase keys or secrets.
+.env
+.env.local
+.env.*.local
+
 .DS_Store
 .firebase
 *-debug.log

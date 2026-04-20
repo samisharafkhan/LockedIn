@@ -8,12 +8,26 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  reload,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  type User,
+} from "firebase/auth";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import type { ActivityId, BlockOutcome, Profile, Pulse, TimeBlock } from "../types";
 import { CELEBRITY_ARCHETYPES } from "../data/celebrities";
 import { DEMO_FRIENDS, type FriendProfile } from "../data/friends";
+import type { AppLocale } from "../i18n/locales";
+import { DEFAULT_LOCALE, isAppLocale } from "../i18n/locales";
+import { translate } from "../i18n/translate";
 import { isoDate } from "../lib/dates";
-import { getFirebaseAuth, googleAuthProvider } from "../lib/firebaseApp";
+import { getFirebaseAuth, getFirestoreDb, googleAuthProvider } from "../lib/firebaseApp";
 import { profilePatchFromGoogleUser } from "../lib/googleProfile";
 import { loadState, saveState, type StoredBlock, type StoredState } from "../lib/storage";
 import { sortBlocks } from "../lib/scheduleBlocks";
@@ -22,7 +36,6 @@ type ScheduleContextValue = {
   tick: number;
   profile: Profile;
   setProfile: (p: Partial<Profile>) => void;
-  /** Today’s editable blocks */
   blocks: TimeBlock[];
   scheduleByDay: Record<string, TimeBlock[]>;
   addBlock: (b: Omit<TimeBlock, "id">) => void;
@@ -40,9 +53,20 @@ type ScheduleContextValue = {
   clearPulse: () => void;
   onboardingDone: boolean;
   finishOnboarding: () => void;
+  locale: AppLocale;
+  setLocale: (l: AppLocale) => void;
+  /** User finished the first-run language screen (before auth). */
+  languageOnboardingComplete: boolean;
+  completeLanguageOnboarding: () => void;
+  t: (key: string, vars?: Record<string, string>) => string;
   firebaseUser: User | null;
   signInWithGoogle: () => Promise<void>;
-  signOutGoogle: () => Promise<void>;
+  signUpWithEmail: (email: string, password: string) => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
+  sendVerificationEmail: () => Promise<void>;
+  reloadFirebaseUser: () => Promise<void>;
+  signOutAuth: () => Promise<void>;
 };
 
 const ScheduleContext = createContext<ScheduleContextValue | null>(null);
@@ -101,6 +125,8 @@ function toStored(
   followingIds: string[],
   pulse: Pulse | null,
   onboarded: boolean,
+  locale: AppLocale,
+  languageOnboardingComplete: boolean,
 ): StoredState {
   const blocksByDay: Record<string, StoredBlock[]> = {};
   const pruned = pruneByDay(scheduleByDay);
@@ -111,9 +137,16 @@ function toStored(
     profile: { ...profile },
     blocksByDay,
     followingIds,
+    locale,
+    languageOnboardingComplete,
     ...(pulse ? { pulse: { activityId: pulse.activityId, at: pulse.at } } : {}),
     ...(onboarded ? { onboarded: true } : {}),
   };
+}
+
+function handleFromEmail(email: string) {
+  const local = email.split("@")[0]?.toLowerCase().replace(/[^a-z0-9_]/g, "") || "you";
+  return local.slice(0, 24);
 }
 
 export function ScheduleProvider({ children }: { children: ReactNode }) {
@@ -125,18 +158,21 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [tick, setTick] = useState(0);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [locale, setLocaleState] = useState<AppLocale>(DEFAULT_LOCALE);
+  const [languageOnboardingComplete, setLanguageOnboardingComplete] = useState(false);
+  const [remoteLoaded, setRemoteLoaded] = useState(false);
   const skipSave = useRef(true);
+  const applyingRemote = useRef(false);
 
   const todayKey = useMemo(() => isoDate(new Date()), [tick]);
 
-  useEffect(() => {
-    const id = window.setInterval(() => setTick((t) => t + 1), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
+  const t = useCallback(
+    (key: string, vars?: Record<string, string>) => translate(locale, key, vars),
+    [locale],
+  );
 
-  useEffect(() => {
-    const s = loadState();
-    if (s?.profile) {
+  const applyStoredState = useCallback((s: StoredState) => {
+    if (s.profile) {
       setProfileState({
         handle: s.profile.handle,
         displayName: s.profile.displayName,
@@ -146,39 +182,72 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       });
     }
 
-    if (s?.blocksByDay && typeof s.blocksByDay === "object") {
+    if (s.blocksByDay && typeof s.blocksByDay === "object") {
       const mapped: Record<string, TimeBlock[]> = {};
       for (const [day, list] of Object.entries(s.blocksByDay)) {
         if (Array.isArray(list)) mapped[day] = list.map(fromStoredBlock);
       }
       setScheduleByDay(mapped);
-    } else if (Array.isArray(s?.blocks)) {
+    } else if (Array.isArray(s.blocks)) {
       const migrated = s.blocks.map(fromStoredBlock);
       setScheduleByDay({ [isoDate(new Date())]: migrated });
     }
 
-    if (Array.isArray(s?.followingIds)) setFollowingIds(s.followingIds);
+    if (Array.isArray(s.followingIds)) setFollowingIds(s.followingIds);
+    else setFollowingIds([]);
 
-    if (s?.pulse) {
+    if (s.pulse) {
       setPulseState({
         activityId: s.pulse.activityId as ActivityId,
         at: s.pulse.at,
       });
+    } else {
+      setPulseState(null);
     }
-    if (s?.onboarded) setOnboardingDone(true);
-    else if (s?.profile?.displayName && s.profile.displayName !== defaultProfile.displayName) {
+
+    if (s.onboarded) setOnboardingDone(true);
+    else if (s.profile?.displayName && s.profile.displayName !== defaultProfile.displayName) {
       setOnboardingDone(true);
+    } else {
+      setOnboardingDone(false);
     }
-    setHydrated(true);
+
+    if (s.locale && isAppLocale(s.locale)) {
+      setLocaleState(s.locale);
+    }
+
+    const langDone = s.languageOnboardingComplete === true || s.hasCompletedLanguageStep === true;
+    setLanguageOnboardingComplete(langDone);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = locale === "ar" ? "ar" : locale;
+    document.documentElement.dir = locale === "ar" ? "rtl" : "ltr";
+  }, [locale]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((x) => x + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const s = loadState();
+    if (s) applyStoredState(s);
+
+    setHydrated(true);
+  }, [applyStoredState]);
 
   useEffect(() => {
     if (!hydrated) return;
     const auth = getFirebaseAuth();
     if (!auth) return;
+    const db = getFirestoreDb();
     return onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
-      if (!user) return;
+      if (!user) {
+        setRemoteLoaded(false);
+        return;
+      }
       setProfileState((prev) => {
         if (
           prev.displayName !== defaultProfile.displayName ||
@@ -188,12 +257,28 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         }
         return { ...prev, ...profilePatchFromGoogleUser(user) };
       });
-      setOnboardingDone((prev) => {
-        if (prev) return prev;
-        return Boolean(user.displayName?.trim() || user.email);
-      });
+
+      if (!db) {
+        setRemoteLoaded(true);
+        return;
+      }
+
+      void (async () => {
+        try {
+          const snap = await getDoc(doc(db, "userState", user.uid));
+          if (snap.exists()) {
+            applyingRemote.current = true;
+            applyStoredState(snap.data() as StoredState);
+            queueMicrotask(() => {
+              applyingRemote.current = false;
+            });
+          }
+        } finally {
+          setRemoteLoaded(true);
+        }
+      })();
     });
-  }, [hydrated]);
+  }, [applyStoredState, hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -201,8 +286,47 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       skipSave.current = false;
       return;
     }
-    saveState(toStored(profile, scheduleByDay, followingIds, pulse, onboardingDone));
-  }, [hydrated, profile, scheduleByDay, followingIds, pulse, onboardingDone]);
+    const stored = toStored(
+      profile,
+      scheduleByDay,
+      followingIds,
+      pulse,
+      onboardingDone,
+      locale,
+      languageOnboardingComplete,
+    );
+    saveState(stored);
+
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser || !remoteLoaded || applyingRemote.current) return;
+    void setDoc(
+      doc(db, "userState", firebaseUser.uid),
+      {
+        ...stored,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }, [
+    hydrated,
+    profile,
+    scheduleByDay,
+    followingIds,
+    pulse,
+    onboardingDone,
+    locale,
+    languageOnboardingComplete,
+    firebaseUser,
+    remoteLoaded,
+  ]);
+
+  const setLocale = useCallback((l: AppLocale) => {
+    setLocaleState(l);
+  }, []);
+
+  const completeLanguageOnboarding = useCallback(() => {
+    setLanguageOnboardingComplete(true);
+  }, []);
 
   const updateToday = useCallback(
     (fn: (prev: TimeBlock[]) => TimeBlock[]) => {
@@ -221,10 +345,13 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     setProfileState((prev) => ({ ...prev, ...p }));
   }, []);
 
-  const addBlock = useCallback((b: Omit<TimeBlock, "id">) => {
-    const block: TimeBlock = { ...b, id: newId() };
-    updateToday((prev) => [...prev, block]);
-  }, [updateToday]);
+  const addBlock = useCallback(
+    (b: Omit<TimeBlock, "id">) => {
+      const block: TimeBlock = { ...b, id: newId() };
+      updateToday((prev) => [...prev, block]);
+    },
+    [updateToday],
+  );
 
   const updateBlock = useCallback(
     (id: string, patch: Partial<Omit<TimeBlock, "id">>) => {
@@ -278,10 +405,61 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     const cred = await signInWithPopup(auth, googleAuthProvider);
     const patch = profilePatchFromGoogleUser(cred.user);
     setProfileState((prev) => ({ ...prev, ...patch }));
-    setOnboardingDone(true);
   }, []);
 
-  const signOutGoogle = useCallback(async () => {
+  const signUpWithEmail = useCallback(async (email: string, password: string) => {
+    const auth = getFirebaseAuth();
+    if (!auth) throw new Error("Firebase Auth is not configured.");
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    await sendEmailVerification(cred.user);
+    const h = handleFromEmail(email);
+    setProfileState((prev) => ({
+      ...prev,
+      displayName: prev.displayName === defaultProfile.displayName ? h : prev.displayName,
+      handle: prev.handle === defaultProfile.handle ? h : prev.handle,
+    }));
+  }, []);
+
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
+    const auth = getFirebaseAuth();
+    if (!auth) throw new Error("Firebase Auth is not configured.");
+    await signInWithEmailAndPassword(auth, email, password);
+    const h = handleFromEmail(email);
+    setProfileState((prev) => {
+      if (
+        prev.displayName !== defaultProfile.displayName &&
+        prev.handle !== defaultProfile.handle
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        displayName: prev.displayName === defaultProfile.displayName ? h : prev.displayName,
+        handle: prev.handle === defaultProfile.handle ? h : prev.handle,
+      };
+    });
+  }, []);
+
+  const sendPasswordReset = useCallback(async (email: string) => {
+    const auth = getFirebaseAuth();
+    if (!auth) throw new Error("Firebase Auth is not configured.");
+    await sendPasswordResetEmail(auth, email);
+  }, []);
+
+  const sendVerificationEmail = useCallback(async () => {
+    const auth = getFirebaseAuth();
+    if (!auth?.currentUser) throw new Error("Not signed in.");
+    await sendEmailVerification(auth.currentUser);
+  }, []);
+
+  const reloadFirebaseUser = useCallback(async () => {
+    const auth = getFirebaseAuth();
+    if (!auth?.currentUser) return;
+    await reload(auth.currentUser);
+    setFirebaseUser(auth.currentUser);
+  }, []);
+
+  const signOutAuth = useCallback(async () => {
     const auth = getFirebaseAuth();
     if (auth) await signOut(auth);
   }, []);
@@ -308,9 +486,19 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       clearPulse,
       onboardingDone,
       finishOnboarding,
+      locale,
+      setLocale,
+      languageOnboardingComplete,
+      completeLanguageOnboarding,
+      t,
       firebaseUser,
       signInWithGoogle,
-      signOutGoogle,
+      signUpWithEmail,
+      signInWithEmail,
+      sendPasswordReset,
+      sendVerificationEmail,
+      reloadFirebaseUser,
+      signOutAuth,
     }),
     [
       tick,
@@ -331,9 +519,18 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       clearPulse,
       onboardingDone,
       finishOnboarding,
+      locale,
+      languageOnboardingComplete,
+      completeLanguageOnboarding,
+      t,
       firebaseUser,
       signInWithGoogle,
-      signOutGoogle,
+      signUpWithEmail,
+      signInWithEmail,
+      sendPasswordReset,
+      sendVerificationEmail,
+      reloadFirebaseUser,
+      signOutAuth,
     ],
   );
 
@@ -341,7 +538,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     return (
       <div className="boot">
         <div className="boot__mark" aria-hidden />
-        <p className="boot__text">Loading…</p>
+        <p className="boot__text">{translate(DEFAULT_LOCALE, "common_loading")}</p>
       </div>
     );
   }

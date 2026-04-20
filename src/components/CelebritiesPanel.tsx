@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Sparkles } from "lucide-react";
-import { activityById } from "../data/activities";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
@@ -9,7 +8,7 @@ import { formatMinRange, overlapSegments } from "../lib/overlap";
 import { minutesSinceMidnight } from "../lib/time";
 
 export function CelebritiesPanel() {
-  const { celebrities, blocks, profile } = useSchedule();
+  const { celebrities, blocks, profile, t } = useSchedule();
   const [id, setId] = useState(celebrities[0]?.id ?? "");
 
   const celeb = useMemo(() => celebrities.find((c) => c.id === id) ?? celebrities[0], [id, celebrities]);
@@ -36,13 +35,13 @@ export function CelebritiesPanel() {
     <section className="stars" aria-labelledby="stars-heading">
       <div className="stars__head">
         <div>
-          <p className="eyebrow eyebrow--dark">Public arcs</p>
+          <p className="eyebrow eyebrow--dark">{t("stars_eyebrow")}</p>
           <h2 id="stars-heading" className="stars__title">
-            Compare to a known early riser
+            {t("stars_title")}
           </h2>
           <p className="stars__banner">
             <Sparkles size={16} strokeWidth={2} aria-hidden />
-            Illustrative day templates inspired by interviews & articles — not verified schedules.
+            {t("stars_banner")}
           </p>
         </div>
         <div className="avatar-ring" aria-hidden>
@@ -70,45 +69,44 @@ export function CelebritiesPanel() {
         <p className="stars__note">{celeb.note}</p>
         <div className="stars__now">
           <div>
-            <p className="stars__now-label">You right now</p>
+            <p className="stars__now-label">{t("stars_now_you")}</p>
             <p className="stars__now-value">
-              {mineNow ? activityById(mineNow.activityId).label : "No block"}
+              {mineNow ? t(`act_${mineNow.activityId}_label`) : t("stars_no_block")}
             </p>
           </div>
           <div>
-            <p className="stars__now-label">Their template</p>
+            <p className="stars__now-label">{t("stars_now_their")}</p>
             <p className="stars__now-value">
-              {theirsNow ? activityById(theirsNow.activityId).label : "Off template"}
+              {theirsNow ? t(`act_${theirsNow.activityId}_label`) : t("stars_off_template")}
             </p>
           </div>
         </div>
       </article>
 
       <div className="overlap-list">
-        <h4 className="overlap-list__title">Where your plan overlaps theirs</h4>
+        <h4 className="overlap-list__title">{t("stars_overlap_title")}</h4>
         <ul>
           {both.map((s, i) => (
             <li key={`${s.startMin}-${i}`}>
-              <span className="overlap-pill overlap-pill--soft">Overlap</span>
+              <span className="overlap-pill overlap-pill--soft">{t("stars_overlap_label")}</span>
               <span className="overlap-range">{formatMinRange(s.startMin, s.endMin)}</span>
             </li>
           ))}
         </ul>
         {both.length === 0 ? (
-          <p className="friends__muted">No overlapping busy windows with this template today.</p>
+          <p className="friends__muted">{t("stars_overlap_none")}</p>
         ) : null}
       </div>
 
       <ol className="stars__timeline">
         {celeb.blocks.map((b) => {
-          const a = activityById(b.activityId);
           return (
             <li key={b.id} className="stars__tl-item">
               <span className="stars__tl-icon" aria-hidden>
                 <ActivityIcon id={b.activityId} size={18} />
               </span>
               <div>
-                <p className="stars__tl-label">{a.label}</p>
+                <p className="stars__tl-label">{t(`act_${b.activityId}_label`)}</p>
                 <p className="stars__tl-time">
                   {formatMinRange(blockStartMinutes(b), blockEndMinutesExclusive(b))}
                 </p>

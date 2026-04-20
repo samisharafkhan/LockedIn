@@ -24,6 +24,12 @@ export type StoredState = {
   followingIds?: string[];
   pulse?: { activityId: string; at: number };
   onboarded?: boolean;
+  /** BCP-47 style locale id, e.g. en, es */
+  locale?: string;
+  /** @deprecated use languageOnboardingComplete */
+  hasCompletedLanguageStep?: boolean;
+  /** Chosen language on first launch, before sign-in */
+  languageOnboardingComplete?: boolean;
 };
 
 export function loadState(): StoredState | null {

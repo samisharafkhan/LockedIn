@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Plus } from "lucide-react";
-import { activityById } from "../data/activities";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
@@ -52,7 +51,7 @@ function progress01(b: TimeBlock, nowMin: number) {
 }
 
 export function SchedulePanel() {
-  const { blocks, profile, addBlock, updateBlock, removeBlock, setBlockOutcome, tick } =
+  const { blocks, profile, addBlock, updateBlock, removeBlock, setBlockOutcome, tick, t } =
     useSchedule();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetMode, setSheetMode] = useState<
@@ -116,49 +115,44 @@ export function SchedulePanel() {
     <section className="schedule" aria-labelledby="sched-heading">
       <div className="schedule__intro">
         <div>
-          <p className="eyebrow eyebrow--dark">Build</p>
+          <p className="eyebrow eyebrow--dark">{t("schedule_eyebrow")}</p>
           <h2 id="sched-heading" className="schedule__title">
             {todayLabel()}
           </h2>
-          <p className="schedule__sub">
-            Stack your own blocks — tap to edit. Past blocks ask for a quick done check-in.
-          </p>
+          <p className="schedule__sub">{t("schedule_intro")}</p>
         </div>
-        <button type="button" className="avatar-ring" aria-label="You">
+        <button type="button" className="avatar-ring" aria-label={t("nav_profile")}>
           <AvatarDisplay source={profile} size="md" />
         </button>
       </div>
 
       {pending.length ? (
-        <div className="checkin-banner" role="region" aria-label="Block check-ins">
-          <p className="checkin-banner__title">Quick check-in</p>
-          <p className="checkin-banner__sub">
-            A few blocks already ended — did you stick to them?
-          </p>
+        <div className="checkin-banner" role="region" aria-label={t("schedule_checkin_title")}>
+          <p className="checkin-banner__title">{t("schedule_checkin_title")}</p>
+          <p className="checkin-banner__sub">{t("schedule_checkin_sub")}</p>
           <ul className="checkin-list">
             {pending.map((b) => {
-              const a = activityById(b.activityId);
               return (
                 <li key={b.id} className="checkin-row">
                   <div>
-                    <p className="checkin-row__name">{a.label}</p>
+                    <p className="checkin-row__name">{t(`act_${b.activityId}_label`)}</p>
                     <p className="checkin-row__time">
                       {formatHm(b.startHour, b.startMinute)} –{" "}
                       {b.endHour === 24 && b.endMinute === 0
-                        ? "midnight"
+                        ? t("schedule_midnight")
                         : formatHm(b.endHour, b.endMinute)}
                     </p>
                   </div>
                   <div className="checkin-row__actions">
                     <button type="button" className="btn btn--sm btn--primary" onClick={() => mark(b.id, "done")}>
-                      Done
+                      {t("schedule_done")}
                     </button>
                     <button
                       type="button"
                       className="btn btn--sm btn--outline"
                       onClick={() => mark(b.id, "not_done")}
                     >
-                      Not quite
+                      {t("schedule_not_done")}
                     </button>
                   </div>
                 </li>
@@ -186,14 +180,13 @@ export function SchedulePanel() {
           <span className="cal__now-line" style={{ top: `${(nowMin / (24 * 60)) * 100}%` }} aria-hidden />
           {blocks.length === 0 ? (
             <div className="cal__empty">
-              <p className="cal__empty-title">Nothing here yet</p>
-              <p className="cal__empty-text">Tap + to add your first block.</p>
+              <p className="cal__empty-title">{t("schedule_empty_title")}</p>
+              <p className="cal__empty-text">{t("schedule_empty_text")}</p>
             </div>
           ) : null}
           {blocks.map((b) => {
             const layout = blockLayout(b);
             if (!layout) return null;
-            const a = activityById(b.activityId);
             const active = isActive(b, nowMin);
             const past = nowMin >= blockEndMinutesExclusive(b);
             const pct = active ? progress01(b, nowMin) * 100 : past ? 100 : 0;
@@ -211,16 +204,18 @@ export function SchedulePanel() {
                   <ActivityIcon id={b.activityId} size={18} />
                 </span>
                 <span className="cal__block-text">
-                  <span className="cal__block-name">{a.label}</span>
+                  <span className="cal__block-name">{t(`act_${b.activityId}_label`)}</span>
                   <span className="cal__block-time">
                     {formatHm(b.startHour, b.startMinute)} –{" "}
                     {b.endHour === 24 && b.endMinute === 0
-                      ? "midnight"
+                      ? t("schedule_midnight")
                       : formatHm(b.endHour, b.endMinute)}
                   </span>
-                  {b.outcome === "done" ? <span className="cal__badge cal__badge--done">Done</span> : null}
+                  {b.outcome === "done" ? (
+                    <span className="cal__badge cal__badge--done">{t("schedule_badge_done")}</span>
+                  ) : null}
                   {b.outcome === "not_done" ? (
-                    <span className="cal__badge cal__badge--miss">Missed</span>
+                    <span className="cal__badge cal__badge--miss">{t("schedule_badge_missed")}</span>
                   ) : null}
                 </span>
               </button>
@@ -229,7 +224,7 @@ export function SchedulePanel() {
         </div>
       </div>
 
-      <button type="button" className="fab" onClick={openAdd} aria-label="Add calendar block">
+      <button type="button" className="fab" onClick={openAdd} aria-label={t("schedule_add_block_a11y")}>
         <Plus size={26} strokeWidth={2.25} />
       </button>
 

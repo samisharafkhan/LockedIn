@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import { ACTIVITIES } from "../data/activities";
 import type { ActivityId, TimeBlock } from "../types";
+import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
 import {
   formatTimeValue,
@@ -12,12 +13,12 @@ import {
 
 /** `<input type="time">` may emit `HH:MM:SS`; normalize so parsing and display stay in sync. */
 function normalizeTimeFieldInput(value: string) {
-  const t = value.trim();
-  const m = t.match(/^(\d{1,2}):(\d{2})(?::\d{2})?/);
-  if (!m) return t;
+  const raw = value.trim();
+  const m = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?/);
+  if (!m) return raw;
   const h = Number(m[1]);
   const min = Number(m[2]);
-  if (!Number.isFinite(h) || !Number.isFinite(min)) return t;
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return raw;
   const hh = Math.min(23, Math.max(0, h));
   const mm = Math.min(59, Math.max(0, min));
   return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
@@ -38,6 +39,7 @@ type Props = {
 };
 
 export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }: Props) {
+  const { t } = useSchedule();
   const [activityId, setActivityId] = useState<ActivityId>("work");
   const [startStr, setStartStr] = useState("09:00");
   const [endStr, setEndStr] = useState("10:00");
@@ -79,11 +81,11 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
     const s = parseTimeValue(startStr);
     const eParsed = parseTimeValue(endStr);
     if (!s || !eParsed) {
-      setError("Use times like 09:00 or end 24:00 for midnight.");
+      setError(t("block_err_time_format"));
       return;
     }
     if (!isValidRange(s.hour, s.minute, eParsed.hour, eParsed.minute)) {
-      setError("End needs to be after start (same day).");
+      setError(t("block_err_range"));
       return;
     }
     const candidate = {
@@ -95,7 +97,7 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
       activityId,
     };
     if (hasConflict(allBlocks, candidate)) {
-      setError("That time overlaps another block.");
+      setError(t("block_err_overlap"));
       return;
     }
     setError(null);
@@ -112,28 +114,31 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
 
   return (
     <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
-      <button type="button" className="sheet__backdrop" aria-label="Close" onClick={onClose} />
+      <button
+        type="button"
+        className="sheet__backdrop"
+        aria-label={t("block_close")}
+        onClick={onClose}
+      />
       <div className="sheet__panel">
         <div className="sheet__head">
           <div className="sheet__grab" aria-hidden />
           <div className="sheet__top">
             <h2 id="sheet-title" className="sheet__title">
-              {mode.kind === "edit" ? "Edit block" : "New block"}
+              {mode.kind === "edit" ? t("block_edit_title") : t("block_new_title")}
             </h2>
-            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+            <button type="button" className="icon-btn" onClick={onClose} aria-label={t("block_close")}>
               <X size={22} strokeWidth={2} />
             </button>
           </div>
         </div>
         <div className="sheet__body">
           <p className="sheet__lede">
-            {mode.kind === "add"
-              ? "Choose a type and time, then tap Add to calendar — no need to drag the sheet."
-              : "Adjust the type or times, then save your changes."}
+            {mode.kind === "add" ? t("block_lede_add") : t("block_lede_edit")}
           </p>
 
-          <p className="sheet__section-label">Type</p>
-          <div className="activity-pick" role="listbox" aria-label="Activity type">
+          <p className="sheet__section-label">{t("block_type_label")}</p>
+          <div className="activity-pick" role="listbox" aria-label={t("block_type_label")}>
             {ACTIVITIES.map((a) => (
               <button
                 key={a.id}
@@ -144,8 +149,8 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
               >
                 <ActivityIcon id={a.id} size={24} />
                 <span className="activity-pick__text">
-                  <span className="activity-pick__name">{a.label}</span>
-                  <span className="activity-pick__hint">{a.hint}</span>
+                  <span className="activity-pick__name">{t(`act_${a.id}_label`)}</span>
+                  <span className="activity-pick__hint">{t(`act_${a.id}_hint`)}</span>
                 </span>
               </button>
             ))}
@@ -153,7 +158,7 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
 
           <div className="time-grid">
             <label className="time-field">
-              <span className="time-field__label">Starts</span>
+              <span className="time-field__label">{t("block_starts")}</span>
               <input
                 className="time-field__input"
                 type="time"
@@ -163,19 +168,19 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
               />
             </label>
             <label className="time-field">
-              <span className="time-field__label">Ends (24-hour)</span>
+              <span className="time-field__label">{t("block_ends")}</span>
               <input
                 className="time-field__input"
                 type="text"
                 inputMode="text"
-                placeholder="e.g. 13:30 or 24:00"
+                placeholder={t("block_ends_ph")}
                 value={endStr}
                 onChange={(ev) => setEndStr(ev.target.value)}
                 autoComplete="off"
               />
             </label>
           </div>
-          <p className="sheet__micro">Tip: use 24:00 for “through midnight”.</p>
+          <p className="sheet__micro">{t("block_tip_midnight")}</p>
 
           {error ? <p className="sheet__error">{error}</p> : null}
         </div>
@@ -185,11 +190,11 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
             {mode.kind === "edit" && onDelete ? (
               <button type="button" className="btn btn--danger-ghost" onClick={del}>
                 <Trash2 size={18} strokeWidth={2} aria-hidden />
-                Delete block
+                {t("block_delete")}
               </button>
             ) : null}
             <button type="button" className="btn btn--primary btn--wide" onClick={submit}>
-              {mode.kind === "add" ? "Add to calendar" : "Save changes"}
+              {mode.kind === "add" ? t("block_add_calendar") : t("block_save")}
             </button>
           </div>
         </div>
