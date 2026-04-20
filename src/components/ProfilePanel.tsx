@@ -117,6 +117,8 @@ export function ProfilePanel() {
     pulse,
     clearPulse,
     getFriend,
+    firebaseUser,
+    signOutGoogle,
   } = useSchedule();
   const [meScreen, setMeScreen] = useState<MeScreen>("profile");
   const [showReset, setShowReset] = useState(false);
@@ -318,6 +320,25 @@ export function ProfilePanel() {
             subtitle="Name, photo, avatar"
             onClick={() => setMeScreen("edit-profile")}
           />
+          {firebaseUser ? (
+            <button
+              type="button"
+              className="me-settings-row"
+              onClick={() => void signOutGoogle()}
+            >
+              <span className="me-settings-row__left">
+                <span className="me-settings-row__icon" aria-hidden>
+                  <LogOut size={20} strokeWidth={2} />
+                </span>
+                <span className="me-settings-row__textblock">
+                  <span className="me-settings-row__title">Sign out of Google</span>
+                  <span className="me-settings-row__sub">
+                    {firebaseUser.email ?? firebaseUser.displayName ?? "Signed-in session"}
+                  </span>
+                </span>
+              </span>
+            </button>
+          ) : null}
         </div>
       </div>
 

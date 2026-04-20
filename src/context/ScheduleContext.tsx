@@ -8,10 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import type { ActivityId, BlockOutcome, Profile, Pulse, TimeBlock } from "../types";
 import { CELEBRITY_ARCHETYPES } from "../data/celebrities";
 import { DEMO_FRIENDS, type FriendProfile } from "../data/friends";
 import { isoDate } from "../lib/dates";
+import { getFirebaseAuth, googleAuthProvider } from "../lib/firebaseApp";
+import { profilePatchFromGoogleUser } from "../lib/googleProfile";
 import { loadState, saveState, type StoredBlock, type StoredState } from "../lib/storage";
 import { sortBlocks } from "../lib/scheduleBlocks";
 
@@ -37,6 +40,9 @@ type ScheduleContextValue = {
   clearPulse: () => void;
   onboardingDone: boolean;
   finishOnboarding: () => void;
+  firebaseUser: User | null;
+  signInWithGoogle: () => Promise<void>;
+  signOutGoogle: () => Promise<void>;
 };
 
 const ScheduleContext = createContext<ScheduleContextValue | null>(null);
@@ -118,6 +124,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [tick, setTick] = useState(0);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const skipSave = useRef(true);
 
   const todayKey = useMemo(() => isoDate(new Date()), [tick]);
@@ -164,6 +171,29 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     }
     setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const auth = getFirebaseAuth();
+    if (!auth) return;
+    return onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      if (!user) return;
+      setProfileState((prev) => {
+        if (
+          prev.displayName !== defaultProfile.displayName ||
+          prev.handle !== defaultProfile.handle
+        ) {
+          return prev;
+        }
+        return { ...prev, ...profilePatchFromGoogleUser(user) };
+      });
+      setOnboardingDone((prev) => {
+        if (prev) return prev;
+        return Boolean(user.displayName?.trim() || user.email);
+      });
+    });
+  }, [hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -242,6 +272,20 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     setOnboardingDone(true);
   }, []);
 
+  const signInWithGoogle = useCallback(async () => {
+    const auth = getFirebaseAuth();
+    if (!auth) throw new Error("Firebase Auth is not configured for this build.");
+    const cred = await signInWithPopup(auth, googleAuthProvider);
+    const patch = profilePatchFromGoogleUser(cred.user);
+    setProfileState((prev) => ({ ...prev, ...patch }));
+    setOnboardingDone(true);
+  }, []);
+
+  const signOutGoogle = useCallback(async () => {
+    const auth = getFirebaseAuth();
+    if (auth) await signOut(auth);
+  }, []);
+
   const value = useMemo(
     () => ({
       tick,
@@ -264,6 +308,9 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       clearPulse,
       onboardingDone,
       finishOnboarding,
+      firebaseUser,
+      signInWithGoogle,
+      signOutGoogle,
     }),
     [
       tick,
@@ -284,6 +331,9 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       clearPulse,
       onboardingDone,
       finishOnboarding,
+      firebaseUser,
+      signInWithGoogle,
+      signOutGoogle,
     ],
   );
 

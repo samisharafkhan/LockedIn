@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, UserPlus, UserMinus } from "lucide-react";
+import { ChevronDown, Search, UserPlus, UserMinus } from "lucide-react";
 import { activityById } from "../data/activities";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { useSchedule } from "../context/ScheduleContext";
@@ -29,6 +29,7 @@ export function FriendsPanel() {
   } = useSchedule();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dayExpanded, setDayExpanded] = useState(false);
+  const [compareQuery, setCompareQuery] = useState("");
 
   useEffect(() => {
     if (followingIds.length === 0) {
@@ -48,6 +49,19 @@ export function FriendsPanel() {
   const friendBlocks = friend?.blocks ?? [];
 
   const segs = useMemo(() => overlapSegments(blocks, friendBlocks), [blocks, friendBlocks]);
+
+  const followingMatches = useMemo(() => {
+    const q = compareQuery.trim().toLowerCase();
+    return followingIds
+      .map((id) => getFriend(id))
+      .filter((f): f is NonNullable<typeof f> => Boolean(f))
+      .filter((f) => {
+        if (!q) return true;
+        return (
+          f.displayName.toLowerCase().includes(q) || f.handle.toLowerCase().includes(q)
+        );
+      });
+  }, [followingIds, getFriend, compareQuery]);
 
   const nowMin = minutesSinceMidnight(new Date());
   const mineNow = currentBlock(blocks, nowMin);
@@ -107,27 +121,61 @@ export function FriendsPanel() {
 
       <div className="friends__section">
         <h3 className="friends__h3">Compare today</h3>
-        <div className="seg-tabs" role="tablist" aria-label="Pick a friend to compare">
-          {followingIds.length === 0 ? (
-            <p className="friends__empty">Follow someone to compare what you’re both in right now.</p>
-          ) : (
-            followingIds.map((id) => {
-              const f = getFriend(id);
-              if (!f) return null;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className={`seg-tab ${selectedId === id ? "seg-tab--on" : ""}`}
-                  onClick={() => setSelectedId(id)}
-                  aria-pressed={selectedId === id}
-                >
-                  {f.displayName}
-                </button>
-              );
-            })
-          )}
-        </div>
+        {followingIds.length === 0 ? (
+          <p className="friends__empty">Follow someone to compare what you’re both in right now.</p>
+        ) : (
+          <div className="friends__compare-picker">
+            <p className="friends__following-strip-label">Compare with</p>
+            <p className="friends__compare-hint">
+              Search people you follow — works the same with long lists as with a few friends.
+            </p>
+            <div className="friends__compare-search-wrap">
+              <Search className="friends__compare-search-icon" size={18} strokeWidth={2} aria-hidden />
+              <input
+                type="search"
+                className="friends__compare-search"
+                placeholder="Search by name or @handle"
+                value={compareQuery}
+                onChange={(e) => setCompareQuery(e.target.value)}
+                enterKeyHint="search"
+                autoComplete="off"
+                aria-label="Search people you follow"
+              />
+            </div>
+            <ul className="friends__following-list" role="listbox" aria-label="Following — pick someone to compare">
+              {followingMatches.length === 0 ? (
+                <li className="friends__compare-empty">
+                  {compareQuery.trim()
+                    ? `No one you follow matches “${compareQuery.trim()}”.`
+                    : "No people to show."}
+                </li>
+              ) : (
+                followingMatches.map((f) => (
+                  <li key={f.id} role="none">
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={selectedId === f.id}
+                      className={`friends__following-row ${selectedId === f.id ? "friends__following-row--on" : ""}`}
+                      onClick={() => setSelectedId(f.id)}
+                    >
+                      <span className="friends__following-row-mark" aria-hidden>
+                        {f.mark}
+                      </span>
+                      <span className="friends__following-row-text">
+                        <p className="friends__following-row-name">{f.displayName}</p>
+                        <p className="friends__following-row-handle">@{f.handle}</p>
+                      </span>
+                      <span className="friends__following-row-check">
+                        {selectedId === f.id ? "Selected" : ""}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+        )}
 
         {friend ? (
           <>

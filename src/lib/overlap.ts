@@ -55,6 +55,10 @@ function mergeAdjacent(segs: OverlapSegment[]) {
 
 export function formatMinRange(startMin: number, endMin: number) {
   const fmt = (m: number) => {
+    /** Exclusive end-of-day boundary (24:00) is minute 1440 — show as 12:00am, not 12:00pm. */
+    if (m >= 24 * 60) {
+      return "12:00am";
+    }
     const h = Math.floor(m / 60);
     const mi = m % 60;
     const ap = h >= 12 ? "pm" : "am";

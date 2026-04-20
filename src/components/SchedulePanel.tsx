@@ -72,7 +72,7 @@ export function SchedulePanel() {
   }, []);
 
   const openAdd = () => {
-    const d = defaultNewBlockRange();
+    const d = defaultNewBlockRange(blocks);
     setSheetMode({
       kind: "add",
       defaults: {

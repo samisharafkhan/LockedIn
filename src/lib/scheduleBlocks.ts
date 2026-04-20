@@ -51,7 +51,9 @@ export function isValidRange(
 export function parseTimeValue(value: string) {
   const raw = value.trim();
   if (raw === "24:00") return { hour: 24, minute: 0 };
-  const [h, m] = raw.split(":").map((x) => Number(x));
+  const parts = raw.split(":");
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
   if (h < 0 || h > 24 || m < 0 || m > 59) return null;
   if (h === 24 && m !== 0) return null;
@@ -62,11 +64,12 @@ export function formatTimeValue(hour: number, minute: number) {
   return `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
 }
 
-/** Next 30-minute boundary from now, for quick-add defaults. */
-export function defaultNewBlockRange() {
-  const d = new Date();
-  let m = d.getHours() * 60 + d.getMinutes();
-  m = Math.ceil(m / 30) * 30;
+function rangeFromStartMinute(m: number): {
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+} {
   if (m >= 24 * 60) m = 23 * 60 + 30;
   const startH = Math.floor(m / 60);
   const startM = m % 60;
@@ -78,4 +81,28 @@ export function defaultNewBlockRange() {
     return { startHour: startH, startMinute: startM, endHour: 24, endMinute: 0 };
   }
   return { startHour: startH, startMinute: startM, endHour: endH, endMinute: endMi };
+}
+
+/** Next 30-minute boundary from now, for quick-add defaults (first non-overlapping slot). */
+export function defaultNewBlockRange(existingBlocks: TimeBlock[] = []) {
+  const d = new Date();
+  let m = d.getHours() * 60 + d.getMinutes();
+  m = Math.ceil(m / 30) * 30;
+  const fromNow = rangeFromStartMinute(m);
+  const tryConflict = (r: {
+    startHour: number;
+    startMinute: number;
+    endHour: number;
+    endMinute: number;
+  }) => hasConflict(existingBlocks, { id: "__draft__", ...r });
+
+  if (!tryConflict(fromNow)) return fromNow;
+
+  for (let start = 0; start < 24 * 60; start += 30) {
+    const r = rangeFromStartMinute(start);
+    if (!isValidRange(r.startHour, r.startMinute, r.endHour, r.endMinute)) continue;
+    if (!tryConflict(r)) return r;
+  }
+
+  return { startHour: 9, startMinute: 0, endHour: 10, endMinute: 0 };
 }

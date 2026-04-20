@@ -18,6 +18,7 @@ export function activityAtMinute(blocks: TimeBlock[], minute: number): ActivityI
 }
 
 export function formatHm(h: number, m: number) {
+  if (h === 24 && m === 0) return "12:00am";
   const ap = h >= 12 ? "pm" : "am";
   const h12 = ((h + 11) % 12) + 1;
   const mm = m.toString().padStart(2, "0");
