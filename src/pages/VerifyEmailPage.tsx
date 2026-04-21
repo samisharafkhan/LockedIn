@@ -5,18 +5,13 @@ import { needsEmailVerification } from "../lib/authHelpers";
 import { getFirebaseAuth } from "../lib/firebaseApp";
 
 export function VerifyEmailPage() {
-  const { t, firebaseUser, sendVerificationEmail, reloadFirebaseUser, signOutAuth, languageOnboardingComplete } =
-    useSchedule();
+  const { t, firebaseUser, sendVerificationEmail, reloadFirebaseUser, signOutAuth } = useSchedule();
   const navigate = useNavigate();
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!languageOnboardingComplete) {
-      navigate("/language", { replace: true });
-      return;
-    }
     if (!firebaseUser) {
       navigate("/welcome", { replace: true });
       return;
@@ -24,7 +19,7 @@ export function VerifyEmailPage() {
     if (!needsEmailVerification(firebaseUser)) {
       navigate("/", { replace: true });
     }
-  }, [languageOnboardingComplete, firebaseUser, navigate]);
+  }, [firebaseUser, navigate]);
 
   const refresh = async () => {
     setErr(null);

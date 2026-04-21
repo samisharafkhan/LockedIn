@@ -3,9 +3,12 @@ import { ChevronDown, Search, UserPlus, UserMinus } from "lucide-react";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
+import { DEMO_FRIENDS } from "../data/friends";
 import { blockEndMinutesExclusive, blockStartMinutes } from "../lib/scheduleBlocks";
 import { formatMinRange, overlapSegments } from "../lib/overlap";
 import { formatHm, minutesSinceMidnight } from "../lib/time";
+import { getFirestoreDb } from "../lib/firebaseApp";
+import { fetchUserTodayBlocks, searchDirectoryUsers, type DirectoryUser } from "../lib/userDirectory";
 import type { TimeBlock } from "../types";
 
 function currentBlock(blocks: TimeBlock[], nowMin: number) {
@@ -25,11 +28,18 @@ export function FriendsPanel() {
     toggleFollow,
     isFollowing,
     getFriend,
+    firebaseUser,
+    seedDirectoryUser,
     t,
   } = useSchedule();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dayExpanded, setDayExpanded] = useState(false);
   const [compareQuery, setCompareQuery] = useState("");
+  const [peopleQuery, setPeopleQuery] = useState("");
+  const [debouncedPeopleQ, setDebouncedPeopleQ] = useState("");
+  const [directoryHits, setDirectoryHits] = useState<DirectoryUser[]>([]);
+  const [peopleSearchBusy, setPeopleSearchBusy] = useState(false);
+  const [remoteFriendBlocks, setRemoteFriendBlocks] = useState<TimeBlock[]>([]);
 
   useEffect(() => {
     if (followingIds.length === 0) {
@@ -45,8 +55,60 @@ export function FriendsPanel() {
     setDayExpanded(false);
   }, [selectedId]);
 
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedPeopleQ(peopleQuery), 320);
+    return () => window.clearTimeout(id);
+  }, [peopleQuery]);
+
+  useEffect(() => {
+    const db = getFirestoreDb();
+    const uid = firebaseUser?.uid;
+    if (!db || !uid || debouncedPeopleQ.trim().length < 2) {
+      setDirectoryHits([]);
+      setPeopleSearchBusy(false);
+      return;
+    }
+    let cancelled = false;
+    setPeopleSearchBusy(true);
+    void searchDirectoryUsers(db, debouncedPeopleQ, uid)
+      .then((rows) => {
+        if (!cancelled) setDirectoryHits(rows);
+      })
+      .finally(() => {
+        if (!cancelled) setPeopleSearchBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedPeopleQ, firebaseUser]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setRemoteFriendBlocks([]);
+      return;
+    }
+    const isDemo = DEMO_FRIENDS.some((f) => f.id === selectedId);
+    if (isDemo) {
+      setRemoteFriendBlocks([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchUserTodayBlocks(selectedId).then((b) => {
+      if (!cancelled) setRemoteFriendBlocks(b);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
   const friend = selectedId ? getFriend(selectedId) : undefined;
-  const friendBlocks = friend?.blocks ?? [];
+  const friendBlocks = useMemo(() => {
+    if (!selectedId) return [];
+    if (DEMO_FRIENDS.some((f) => f.id === selectedId)) {
+      return friend?.blocks ?? [];
+    }
+    return remoteFriendBlocks;
+  }, [selectedId, friend, remoteFriendBlocks]);
 
   const segs = useMemo(() => overlapSegments(blocks, friendBlocks), [blocks, friendBlocks]);
 
@@ -80,6 +142,71 @@ export function FriendsPanel() {
         <div className="avatar-ring" aria-hidden>
           <AvatarDisplay source={profile} size="md" />
         </div>
+      </div>
+
+      <div className="friends__section">
+        <h3 className="friends__h3">{t("friends_find_people")}</h3>
+        <p className="friends__sub friends__sub--tight">{t("friends_find_hint")}</p>
+        {!getFirestoreDb() || !firebaseUser ? (
+          <p className="friends__muted">{t("friends_find_offline")}</p>
+        ) : (
+          <>
+            <div className="friends__compare-search-wrap friends__compare-search-wrap--people">
+              <Search className="friends__compare-search-icon" size={18} strokeWidth={2} aria-hidden />
+              <input
+                type="search"
+                className="friends__compare-search"
+                placeholder={t("friends_find_placeholder")}
+                value={peopleQuery}
+                onChange={(e) => setPeopleQuery(e.target.value)}
+                enterKeyHint="search"
+                autoComplete="off"
+                aria-label={t("friends_find_placeholder")}
+              />
+            </div>
+            {peopleSearchBusy ? (
+              <p className="friends__muted">{t("friends_find_busy")}</p>
+            ) : peopleQuery.trim().length >= 2 && directoryHits.length === 0 ? (
+              <p className="friends__muted">{t("friends_find_empty")}</p>
+            ) : (
+              <ul className="friends__directory-list" role="list">
+                {directoryHits.map((u) => (
+                  <li key={u.uid}>
+                    <div className="friend-card friend-card--directory">
+                      <div className="friend-card__row">
+                        <span className="friend-card__mark" aria-hidden>
+                          {u.avatarEmoji ?? "○"}
+                        </span>
+                        <div>
+                          <p className="friend-card__name">{u.displayName}</p>
+                          <p className="friend-card__handle">@{u.handle}</p>
+                        </div>
+                        <button
+                          type="button"
+                          className={`btn btn--sm ${isFollowing(u.uid) ? "btn--outline" : "btn--primary"}`}
+                          onClick={() => {
+                            if (!isFollowing(u.uid)) seedDirectoryUser(u);
+                            toggleFollow(u.uid);
+                          }}
+                        >
+                          {isFollowing(u.uid) ? (
+                            <>
+                              <UserMinus size={16} strokeWidth={2} aria-hidden /> {t("friends_unfollow")}
+                            </>
+                          ) : (
+                            <>
+                              <UserPlus size={16} strokeWidth={2} aria-hidden /> {t("friends_follow")}
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </div>
 
       <div className="friends__section">

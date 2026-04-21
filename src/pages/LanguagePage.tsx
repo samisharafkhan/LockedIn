@@ -1,12 +1,27 @@
+import { useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { LOCALE_OPTIONS, type AppLocale } from "../i18n/locales";
 import { useSchedule } from "../context/ScheduleContext";
+import { isFirebaseAuthConfigured } from "../lib/firebaseApp";
+import { needsEmailVerification } from "../lib/authHelpers";
 
 export function LanguagePage() {
-  const { t, locale, setLocale, completeLanguageOnboarding } = useSchedule();
+  const { t, locale, setLocale, completeLanguageOnboarding, firebaseUser } = useSchedule();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const fromSettings = params.get("from") === "settings";
+
+  useEffect(() => {
+    if (fromSettings) return;
+    if (!isFirebaseAuthConfigured()) return;
+    if (!firebaseUser) {
+      navigate("/welcome", { replace: true });
+      return;
+    }
+    if (needsEmailVerification(firebaseUser)) {
+      navigate("/verify-email", { replace: true });
+    }
+  }, [firebaseUser, fromSettings, navigate]);
 
   const pick = (id: AppLocale) => {
     setLocale(id);
@@ -15,7 +30,7 @@ export function LanguagePage() {
       return;
     }
     completeLanguageOnboarding();
-    navigate("/welcome", { replace: true });
+    navigate("/profile-setup", { replace: true });
   };
 
   return (

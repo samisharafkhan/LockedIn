@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useSchedule } from "../context/ScheduleContext";
-import { useRequireLanguageFirst } from "../hooks/useRequireLanguageFirst";
 import { authErrorToKey } from "../lib/authErrors";
 
 export function ForgotPasswordPage() {
-  useRequireLanguageFirst();
   const { t, sendPasswordReset } = useSchedule();
   const [email, setEmail] = useState("");
   const [err, setErr] = useState<string | null>(null);

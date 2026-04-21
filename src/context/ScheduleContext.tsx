@@ -28,8 +28,12 @@ import { DEFAULT_LOCALE, isAppLocale } from "../i18n/locales";
 import { translate } from "../i18n/translate";
 import { isoDate } from "../lib/dates";
 import { getFirebaseAuth, getFirestoreDb, googleAuthProvider } from "../lib/firebaseApp";
-import { profilePatchFromGoogleUser } from "../lib/googleProfile";
 import { loadState, saveState, type StoredBlock, type StoredState } from "../lib/storage";
+import {
+  USER_DIRECTORY_COLLECTION,
+  userDirectoryWriteFields,
+  type DirectoryUser,
+} from "../lib/userDirectory";
 import { sortBlocks } from "../lib/scheduleBlocks";
 
 type ScheduleContextValue = {
@@ -55,7 +59,7 @@ type ScheduleContextValue = {
   finishOnboarding: () => void;
   locale: AppLocale;
   setLocale: (l: AppLocale) => void;
-  /** User finished the first-run language screen (before auth). */
+  /** User finished the language screen (after sign-in / verification). */
   languageOnboardingComplete: boolean;
   completeLanguageOnboarding: () => void;
   t: (key: string, vars?: Record<string, string>) => string;
@@ -67,6 +71,7 @@ type ScheduleContextValue = {
   sendVerificationEmail: () => Promise<void>;
   reloadFirebaseUser: () => Promise<void>;
   signOutAuth: () => Promise<void>;
+  seedDirectoryUser: (u: DirectoryUser) => void;
 };
 
 const ScheduleContext = createContext<ScheduleContextValue | null>(null);
@@ -144,11 +149,6 @@ function toStored(
   };
 }
 
-function handleFromEmail(email: string) {
-  const local = email.split("@")[0]?.toLowerCase().replace(/[^a-z0-9_]/g, "") || "you";
-  return local.slice(0, 24);
-}
-
 export function ScheduleProvider({ children }: { children: ReactNode }) {
   const [profile, setProfileState] = useState<Profile>(defaultProfile);
   const [scheduleByDay, setScheduleByDay] = useState<Record<string, TimeBlock[]>>({});
@@ -161,6 +161,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<AppLocale>(DEFAULT_LOCALE);
   const [languageOnboardingComplete, setLanguageOnboardingComplete] = useState(false);
   const [remoteLoaded, setRemoteLoaded] = useState(false);
+  const [directoryById, setDirectoryById] = useState<Record<string, FriendProfile>>({});
   const skipSave = useRef(true);
   const applyingRemote = useRef(false);
 
@@ -172,7 +173,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   );
 
   const applyStoredState = useCallback((s: StoredState) => {
-    if (s.profile) {
+    if (s.onboarded === true && s.profile) {
       setProfileState({
         handle: s.profile.handle,
         displayName: s.profile.displayName,
@@ -180,6 +181,8 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         avatarImageDataUrl: s.profile.avatarImageDataUrl ?? null,
         avatarAnimalId: s.profile.avatarAnimalId ?? null,
       });
+    } else {
+      setProfileState({ ...defaultProfile });
     }
 
     if (s.blocksByDay && typeof s.blocksByDay === "object") {
@@ -205,12 +208,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       setPulseState(null);
     }
 
-    if (s.onboarded) setOnboardingDone(true);
-    else if (s.profile?.displayName && s.profile.displayName !== defaultProfile.displayName) {
-      setOnboardingDone(true);
-    } else {
-      setOnboardingDone(false);
-    }
+    setOnboardingDone(s.onboarded === true);
 
     if (s.locale && isAppLocale(s.locale)) {
       setLocaleState(s.locale);
@@ -248,15 +246,6 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         setRemoteLoaded(false);
         return;
       }
-      setProfileState((prev) => {
-        if (
-          prev.displayName !== defaultProfile.displayName ||
-          prev.handle !== defaultProfile.handle
-        ) {
-          return prev;
-        }
-        return { ...prev, ...profilePatchFromGoogleUser(user) };
-      });
 
       if (!db) {
         setRemoteLoaded(true);
@@ -306,7 +295,22 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         updatedAt: serverTimestamp(),
       },
       { merge: true },
-    );
+    ).catch((e) => {
+      console.error("[LockedIn] Firestore userState write failed:", e);
+    });
+
+    if (onboardingDone) {
+      void setDoc(
+        doc(db, USER_DIRECTORY_COLLECTION, firebaseUser.uid),
+        {
+          ...userDirectoryWriteFields(firebaseUser.uid, profile),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      ).catch((e) => {
+        console.error("[LockedIn] Firestore userDirectory write failed:", e);
+      });
+    }
   }, [
     hydrated,
     profile,
@@ -385,7 +389,10 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     [followingIds],
   );
 
-  const getFriend = useCallback((id: string) => DEMO_FRIENDS.find((f) => f.id === id), []);
+  const getFriend = useCallback(
+    (id: string) => DEMO_FRIENDS.find((f) => f.id === id) ?? directoryById[id],
+    [directoryById],
+  );
 
   const setPulse = useCallback((activityId: ActivityId) => {
     setPulseState({ activityId, at: Date.now() });
@@ -402,9 +409,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const signInWithGoogle = useCallback(async () => {
     const auth = getFirebaseAuth();
     if (!auth) throw new Error("Firebase Auth is not configured for this build.");
-    const cred = await signInWithPopup(auth, googleAuthProvider);
-    const patch = profilePatchFromGoogleUser(cred.user);
-    setProfileState((prev) => ({ ...prev, ...patch }));
+    await signInWithPopup(auth, googleAuthProvider);
   }, []);
 
   const signUpWithEmail = useCallback(async (email: string, password: string) => {
@@ -412,32 +417,12 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     if (!auth) throw new Error("Firebase Auth is not configured.");
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await sendEmailVerification(cred.user);
-    const h = handleFromEmail(email);
-    setProfileState((prev) => ({
-      ...prev,
-      displayName: prev.displayName === defaultProfile.displayName ? h : prev.displayName,
-      handle: prev.handle === defaultProfile.handle ? h : prev.handle,
-    }));
   }, []);
 
   const signInWithEmail = useCallback(async (email: string, password: string) => {
     const auth = getFirebaseAuth();
     if (!auth) throw new Error("Firebase Auth is not configured.");
     await signInWithEmailAndPassword(auth, email, password);
-    const h = handleFromEmail(email);
-    setProfileState((prev) => {
-      if (
-        prev.displayName !== defaultProfile.displayName &&
-        prev.handle !== defaultProfile.handle
-      ) {
-        return prev;
-      }
-      return {
-        ...prev,
-        displayName: prev.displayName === defaultProfile.displayName ? h : prev.displayName,
-        handle: prev.handle === defaultProfile.handle ? h : prev.handle,
-      };
-    });
   }, []);
 
   const sendPasswordReset = useCallback(async (email: string) => {
@@ -462,6 +447,20 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const signOutAuth = useCallback(async () => {
     const auth = getFirebaseAuth();
     if (auth) await signOut(auth);
+  }, []);
+
+  const seedDirectoryUser = useCallback((u: DirectoryUser) => {
+    setDirectoryById((prev) => ({
+      ...prev,
+      [u.uid]: {
+        id: u.uid,
+        displayName: u.displayName,
+        handle: u.handle,
+        mark: u.avatarEmoji ?? "○",
+        bio: "",
+        blocks: [],
+      },
+    }));
   }, []);
 
   const value = useMemo(
@@ -499,6 +498,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       sendVerificationEmail,
       reloadFirebaseUser,
       signOutAuth,
+      seedDirectoryUser,
     }),
     [
       tick,
@@ -531,6 +531,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       sendVerificationEmail,
       reloadFirebaseUser,
       signOutAuth,
+      seedDirectoryUser,
     ],
   );
 

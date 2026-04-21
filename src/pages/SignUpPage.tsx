@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useSchedule } from "../context/ScheduleContext";
-import { useRequireLanguageFirst } from "../hooks/useRequireLanguageFirst";
 import { authErrorToKey } from "../lib/authErrors";
 import { isFirebaseAuthConfigured } from "../lib/firebaseApp";
 import { needsEmailVerification } from "../lib/authHelpers";
 
 export function SignUpPage() {
-  useRequireLanguageFirst();
   const { t, signUpWithEmail, firebaseUser } = useSchedule();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");

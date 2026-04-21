@@ -56,7 +56,7 @@ export const en: Record<string, string> = {
     "If texts never arrive: Firebase Console → Authentication → Settings → SMS region policy — allow your country (new projects often start with all regions blocked). For dev without SMS, use Authentication → Sign-in method → Phone numbers for testing.",
 
   language_title: "Choose your language",
-  language_subtitle: "You can change this later in settings when that option is available.",
+  language_subtitle: "After you sign in, pick the language for the app. You can change this later in settings.",
   language_continue: "Continue",
 
   onboard_title: "Let’s set you up",
@@ -70,6 +70,8 @@ export const en: Record<string, string> = {
   onboard_name_label: "Display name",
   onboard_placeholder: "Alex",
   onboard_continue: "Continue",
+  onboard_username_hint:
+    "Choose how you appear in the app. This is separate from your Google or email account — your handle is public and searchable.",
 
   nav_build: "Build",
   nav_friends: "Friends",
@@ -146,8 +148,15 @@ export const en: Record<string, string> = {
 
   friends_eyebrow: "People",
   friends_title: "Friends & overlap",
-  friends_sub: "Follow people to line up calendars. This demo uses local profiles — no server yet.",
+  friends_sub:
+    "Follow demo people below, or search real accounts by name or @handle (after they finish signup). Compare calendars when schedules are available.",
   friends_discover: "Discover",
+  friends_find_people: "Find people",
+  friends_find_placeholder: "Search name or @handle",
+  friends_find_hint: "Type at least 2 characters. Matches handles and display names.",
+  friends_find_empty: "No accounts match that search.",
+  friends_find_offline: "Sign in with Firebase to search people.",
+  friends_find_busy: "Searching…",
   friends_compare_title: "Compare today",
   friends_compare_empty: "Follow someone to compare what you’re both in right now.",
   friends_compare_with_label: "Compare with",
@@ -167,7 +176,7 @@ export const en: Record<string, string> = {
   friends_see_full_day: "See full day for both",
   friends_hide_full_day: "Hide full day",
   friends_your_day: "Your day",
-  friends_their_day: "{{name}}'s day (demo)",
+  friends_their_day: "{{name}}'s day",
   friends_no_blocks: "No blocks yet.",
   friends_overlap_title: "Overlap windows",
   friends_overlap_both: "Both busy",

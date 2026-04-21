@@ -86,21 +86,20 @@ function Shell() {
 
 function ProfileSetupRoute() {
   const { firebaseUser, languageOnboardingComplete } = useSchedule();
-  if (!languageOnboardingComplete) {
-    return <Navigate to="/language" replace />;
-  }
   if (!isFirebaseAuthConfigured() || !firebaseUser) {
     return <Navigate to="/welcome" replace />;
+  }
+  if (needsEmailVerification(firebaseUser)) {
+    return <Navigate to="/verify-email" replace />;
+  }
+  if (!languageOnboardingComplete) {
+    return <Navigate to="/language" replace />;
   }
   return <Onboarding />;
 }
 
 function MainGate() {
   const { firebaseUser, onboardingDone, languageOnboardingComplete } = useSchedule();
-
-  if (!languageOnboardingComplete) {
-    return <Navigate to="/language" replace />;
-  }
 
   if (!isFirebaseAuthConfigured()) {
     return <Navigate to="/welcome" replace />;
@@ -112,6 +111,10 @@ function MainGate() {
 
   if (needsEmailVerification(firebaseUser)) {
     return <Navigate to="/verify-email" replace />;
+  }
+
+  if (!languageOnboardingComplete) {
+    return <Navigate to="/language" replace />;
   }
 
   if (!onboardingDone) {

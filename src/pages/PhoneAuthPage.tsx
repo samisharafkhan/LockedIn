@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "firebase/auth";
 import { useSchedule } from "../context/ScheduleContext";
-import { useRequireLanguageFirst } from "../hooks/useRequireLanguageFirst";
 import { authErrorToKey } from "../lib/authErrors";
 import { getFirebaseAuth } from "../lib/firebaseApp";
 import { needsEmailVerification } from "../lib/authHelpers";
@@ -14,7 +13,6 @@ function authLanguageFromLocale(locale: AppLocale): string {
 }
 
 export function PhoneAuthPage() {
-  useRequireLanguageFirst();
   const { t, firebaseUser, locale } = useSchedule();
   const navigate = useNavigate();
   const [phone, setPhone] = useState("");

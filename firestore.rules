@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Private app state per user — each user may only write their own doc.
+    // Any signed-in user may read (needed to compare today’s schedule with someone you follow).
+    // Tighten to "followers only" later if you need stricter privacy.
+    match /userState/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Public directory for Instagram-style search (handle / display name).
+    match /userDirectory/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

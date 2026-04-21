@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useSchedule } from "../context/ScheduleContext";
-import { useRequireLanguageFirst } from "../hooks/useRequireLanguageFirst";
 import { isFirebaseAuthConfigured } from "../lib/firebaseApp";
 import { needsEmailVerification } from "../lib/authHelpers";
 
 export function WelcomePage() {
-  useRequireLanguageFirst();
   const { t, signInWithGoogle, firebaseUser } = useSchedule();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
