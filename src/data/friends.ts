@@ -8,6 +8,8 @@ export type FriendProfile = {
   bio: string;
   /** Demo “today” arc — not synced to a real account */
   blocks: TimeBlock[];
+  accountPublic?: boolean;
+  isPrivate?: boolean;
 };
 
 const b = (

@@ -19,7 +19,7 @@ import {
   signOut,
   type User,
 } from "firebase/auth";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { deleteDoc, doc, getDoc, getDocFromServer, serverTimestamp, setDoc } from "firebase/firestore";
 import type { ActivityId, BlockOutcome, Profile, Pulse, TimeBlock } from "../types";
 import { CELEBRITY_ARCHETYPES } from "../data/celebrities";
 import { DEMO_FRIENDS, type FriendProfile } from "../data/friends";
@@ -34,10 +34,22 @@ import {
   userDirectoryWriteFields,
   type DirectoryUser,
 } from "../lib/userDirectory";
+import { subscribeOwnerBlockShares } from "../lib/blockShares";
+import {
+  acceptFollowRequest as acceptFollowRequestDoc,
+  buildFollowDocId,
+  FOLLOWS_COLLECTION,
+  getFollowEdgeFromServer,
+  rejectFollowRequest as rejectFollowRequestDoc,
+  requestOrAcceptFollow,
+  subscribeMyFollowLists,
+  unfollowOrCancel,
+} from "../lib/follows";
 import { sortBlocks } from "../lib/scheduleBlocks";
 
 type ScheduleContextValue = {
   tick: number;
+  todayKey: string;
   profile: Profile;
   setProfile: (p: Partial<Profile>) => void;
   blocks: TimeBlock[];
@@ -46,9 +58,19 @@ type ScheduleContextValue = {
   updateBlock: (id: string, patch: Partial<Omit<TimeBlock, "id">>) => void;
   removeBlock: (id: string) => void;
   setBlockOutcome: (id: string, outcome: BlockOutcome) => void;
+  /** Merge or replace a block on a specific day (e.g. accepting a shared event). */
+  mergeBlockIntoDay: (dayKey: string, block: TimeBlock) => void;
   followingIds: string[];
-  toggleFollow: (friendId: string) => void;
+  followerIds: string[];
+  /** Outgoing follow requests waiting on a private account. */
+  pendingOutgoingFollowIds: string[];
+  /** Incoming follow requests you can accept or decline. */
+  pendingIncomingFollows: { followerUid: string }[];
+  toggleFollow: (friendId: string, opts?: { targetIsPrivate?: boolean }) => Promise<void>;
   isFollowing: (friendId: string) => boolean;
+  hasPendingFollowRequest: (friendId: string) => boolean;
+  acceptFollowRequest: (followerUid: string) => Promise<void>;
+  rejectFollowRequest: (followerUid: string) => Promise<void>;
   friends: FriendProfile[];
   getFriend: (id: string) => FriendProfile | undefined;
   celebrities: typeof CELEBRITY_ARCHETYPES;
@@ -82,7 +104,13 @@ const defaultProfile: Profile = {
   avatarEmoji: "◆",
   avatarImageDataUrl: null,
   avatarAnimalId: null,
+  isPrivate: false,
+  accountPublic: true,
+  publishTodayToDiscover: false,
+  bio: "",
 };
+
+const demoFriendIdSet = new Set(DEMO_FRIENDS.map((f) => f.id));
 
 function newId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -153,6 +181,9 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const [profile, setProfileState] = useState<Profile>(defaultProfile);
   const [scheduleByDay, setScheduleByDay] = useState<Record<string, TimeBlock[]>>({});
   const [followingIds, setFollowingIds] = useState<string[]>([]);
+  const [followerIds, setFollowerIds] = useState<string[]>([]);
+  const [pendingOutgoingFollowIds, setPendingOutgoingFollowIds] = useState<string[]>([]);
+  const [pendingIncomingFollows, setPendingIncomingFollows] = useState<{ followerUid: string }[]>([]);
   const [pulse, setPulseState] = useState<Pulse | null>(null);
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -164,6 +195,9 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const [directoryById, setDirectoryById] = useState<Record<string, FriendProfile>>({});
   const skipSave = useRef(true);
   const applyingRemote = useRef(false);
+  /** UIDs we optimistically treat as accepted / pending until Firestore snapshots catch up. */
+  const followAcceptedInFlight = useRef(new Set<string>());
+  const followPendingInFlight = useRef(new Set<string>());
 
   const todayKey = useMemo(() => isoDate(new Date()), [tick]);
 
@@ -174,12 +208,18 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
 
   const applyStoredState = useCallback((s: StoredState) => {
     if (s.onboarded === true && s.profile) {
+      const isPrivate =
+        s.profile.isPrivate === true || s.profile.accountPublic === false;
       setProfileState({
         handle: s.profile.handle,
         displayName: s.profile.displayName,
         avatarEmoji: s.profile.avatarEmoji,
         avatarImageDataUrl: s.profile.avatarImageDataUrl ?? null,
         avatarAnimalId: s.profile.avatarAnimalId ?? null,
+        isPrivate,
+        accountPublic: !isPrivate,
+        publishTodayToDiscover: isPrivate ? false : s.profile.publishTodayToDiscover === true,
+        bio: typeof s.profile.bio === "string" ? s.profile.bio.slice(0, 160) : "",
       });
     } else {
       setProfileState({ ...defaultProfile });
@@ -270,6 +310,151 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   }, [applyStoredState, hydrated]);
 
   useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser || !hydrated) return;
+    const demoIds = new Set(DEMO_FRIENDS.map((f) => f.id));
+    const need = followingIds.filter((id) => !demoIds.has(id));
+    if (need.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      const snaps = await Promise.all(need.map((uid) => getDoc(doc(db, USER_DIRECTORY_COLLECTION, uid))));
+      if (cancelled) return;
+      setDirectoryById((prev) => {
+        const next = { ...prev };
+        for (const snap of snaps) {
+          if (!snap.exists()) continue;
+          const x = snap.data();
+          const isPrivate = x.isPrivate === true || x.accountPublic === false;
+          const bio = typeof x.bio === "string" ? x.bio : "";
+          next[snap.id] = {
+            id: snap.id,
+            displayName: String(x.displayName ?? "User"),
+            handle: String(x.handle ?? ""),
+            mark: String(x.avatarEmoji ?? "○"),
+            bio,
+            blocks: [],
+            isPrivate,
+            accountPublic: !isPrivate,
+          };
+        }
+        return next;
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [followingIds, firebaseUser, hydrated]);
+
+  /** Live follow lists + one-time backfill of legacy local follows into `follows`. */
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser) {
+      followAcceptedInFlight.current.clear();
+      followPendingInFlight.current.clear();
+      setFollowerIds([]);
+      setPendingOutgoingFollowIds([]);
+      setPendingIncomingFollows([]);
+      return;
+    }
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const key = `lockedin:follow-backfill-v1:${firebaseUser.uid}`;
+      if (localStorage.getItem(key) !== "1") {
+        const stored = loadState();
+        const legacy = (stored?.followingIds ?? []).filter((id) => !demoFriendIdSet.has(id));
+        for (const id of legacy) {
+          if (cancelled) return;
+          try {
+            await setDoc(
+              doc(db, FOLLOWS_COLLECTION, buildFollowDocId(firebaseUser.uid, id)),
+              {
+                followerUid: firebaseUser.uid,
+                followingUid: id,
+                status: "accepted",
+                createdAt: serverTimestamp(),
+              },
+              { merge: true },
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+        localStorage.setItem(key, "1");
+      }
+      if (cancelled) return;
+      unsub = subscribeMyFollowLists(firebaseUser.uid, (lists) => {
+        const acceptedRemote = lists.acceptedFollowingIds;
+        const followersRemote = lists.acceptedFollowerIds;
+        const pendingRemote = lists.pendingOutgoingIds;
+        for (const id of [...followAcceptedInFlight.current]) {
+          if (acceptedRemote.includes(id)) followAcceptedInFlight.current.delete(id);
+        }
+        for (const id of [...followPendingInFlight.current]) {
+          if (pendingRemote.includes(id)) followPendingInFlight.current.delete(id);
+        }
+        setFollowingIds((prev) => {
+          const demo = prev.filter((id) => demoFriendIdSet.has(id));
+          const next = new Set<string>([...demo, ...acceptedRemote]);
+          for (const id of followAcceptedInFlight.current) next.add(id);
+          return [...next];
+        });
+        setPendingOutgoingFollowIds(() => {
+          const next = new Set<string>(pendingRemote);
+          for (const id of followPendingInFlight.current) next.add(id);
+          return [...next];
+        });
+        setFollowerIds(followersRemote);
+        setPendingIncomingFollows(lists.pendingIncoming);
+      });
+    })();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [firebaseUser]);
+
+  /** Merge collaborator edits from `blockShares` into today’s local blocks (owner side). */
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser) return;
+    const day = todayKey;
+    return subscribeOwnerBlockShares(firebaseUser.uid, (docs) => {
+      setScheduleByDay((prev) => {
+        const list = prev[day];
+        if (!list?.length) return prev;
+        let changed = false;
+        const nextList = list.map((block) => {
+          const candidates = docs.filter((d) => d.dayKey === day && d.blockId === block.id);
+          if (candidates.length === 0) return block;
+          const share = candidates.reduce((a, b) => {
+            const ta = (a.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+            const tb = (b.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+            return tb >= ta ? b : a;
+          });
+          if (!share?.collabBlock) return block;
+          const c = fromStoredBlock(share.collabBlock);
+          if (
+            block.startHour === c.startHour &&
+            block.startMinute === c.startMinute &&
+            block.endHour === c.endHour &&
+            block.endMinute === c.endMinute &&
+            block.activityId === c.activityId
+          ) {
+            return block;
+          }
+          changed = true;
+          return { ...c, id: block.id, outcome: block.outcome };
+        });
+        if (!changed) return prev;
+        return { ...prev, [day]: sortBlocks(nextList) };
+      });
+    });
+  }, [firebaseUser, todayKey]);
+
+  useEffect(() => {
     if (!hydrated) return;
     if (skipSave.current) {
       skipSave.current = false;
@@ -310,6 +495,32 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       ).catch((e) => {
         console.error("[LockedIn] Firestore userDirectory write failed:", e);
       });
+
+      const day = isoDate(new Date());
+      const canPublish =
+        profile.isPrivate !== true &&
+        profile.publishTodayToDiscover === true &&
+        (scheduleByDay[day]?.length ?? 0) > 0;
+      if (canPublish) {
+        void setDoc(
+          doc(db, "publishedSchedules", firebaseUser.uid),
+          {
+            ownerUid: firebaseUser.uid,
+            dayKey: day,
+            blocks: (scheduleByDay[day] ?? []).map(toStoredBlock),
+            handle: profile.handle.trim(),
+            displayName: profile.displayName.trim(),
+            avatarEmoji: profile.avatarEmoji ?? "○",
+            bio: (profile.bio ?? "").trim().slice(0, 160),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        ).catch((e) => {
+          console.error("[LockedIn] Firestore publishedSchedules write failed:", e);
+        });
+      } else {
+        void deleteDoc(doc(db, "publishedSchedules", firebaseUser.uid)).catch(() => {});
+      }
     }
   }, [
     hydrated,
@@ -346,7 +557,15 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const blocks = scheduleByDay[todayKey] ?? [];
 
   const setProfile = useCallback((p: Partial<Profile>) => {
-    setProfileState((prev) => ({ ...prev, ...p }));
+    setProfileState((prev) => {
+      const next = { ...prev, ...p };
+      if ("isPrivate" in p && p.isPrivate != null) {
+        next.isPrivate = p.isPrivate;
+        next.accountPublic = !p.isPrivate;
+        if (p.isPrivate) next.publishTodayToDiscover = false;
+      }
+      return next;
+    });
   }, []);
 
   const addBlock = useCallback(
@@ -378,15 +597,120 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     [updateToday],
   );
 
-  const toggleFollow = useCallback((friendId: string) => {
-    setFollowingIds((prev) =>
-      prev.includes(friendId) ? prev.filter((x) => x !== friendId) : [...prev, friendId],
-    );
+  const mergeBlockIntoDay = useCallback((dayKey: string, block: TimeBlock) => {
+    setScheduleByDay((prev) => {
+      const list = prev[dayKey] ?? [];
+      const idx = list.findIndex((x) => x.id === block.id);
+      const nextList = idx >= 0 ? list.map((x) => (x.id === block.id ? block : x)) : [...list, block];
+      return { ...prev, [dayKey]: sortBlocks(nextList) };
+    });
   }, []);
+
+  const toggleFollow = useCallback(
+    async (friendId: string, opts?: { targetIsPrivate?: boolean }) => {
+      if (!friendId.trim()) throw new Error("Missing target user.");
+      if (demoFriendIdSet.has(friendId)) {
+        setFollowingIds((prev) =>
+          prev.includes(friendId) ? prev.filter((x) => x !== friendId) : [...prev, friendId],
+        );
+        return;
+      }
+      const db = getFirestoreDb();
+      if (!db || !firebaseUser) {
+        throw new Error("Sign in is required to follow people.");
+      }
+      if (firebaseUser.uid === friendId) {
+        throw new Error("You cannot follow your own account.");
+      }
+
+      const applyLocalFollowUi = (targetPrivate: boolean) => {
+        if (targetPrivate) {
+          followAcceptedInFlight.current.delete(friendId);
+          followPendingInFlight.current.add(friendId);
+          setFollowingIds((p) => p.filter((x) => x !== friendId));
+          setPendingOutgoingFollowIds((p) => (p.includes(friendId) ? p : [...p, friendId]));
+        } else {
+          followPendingInFlight.current.delete(friendId);
+          followAcceptedInFlight.current.add(friendId);
+          setPendingOutgoingFollowIds((p) => p.filter((x) => x !== friendId));
+          setFollowingIds((p) => (p.includes(friendId) ? p : [...p, friendId]));
+        }
+      };
+
+      const hint = opts?.targetIsPrivate;
+      if (hint === true || hint === false) {
+        applyLocalFollowUi(hint);
+      }
+
+      try {
+        const edge = await getFollowEdgeFromServer(db, firebaseUser.uid, friendId);
+        if (edge) {
+          const wasAccepted = edge.status === "accepted";
+          followAcceptedInFlight.current.delete(friendId);
+          followPendingInFlight.current.delete(friendId);
+          if (wasAccepted) {
+            setFollowingIds((prev) => prev.filter((x) => x !== friendId));
+          } else {
+            setPendingOutgoingFollowIds((prev) => prev.filter((x) => x !== friendId));
+          }
+          try {
+            await unfollowOrCancel(db, firebaseUser.uid, friendId);
+          } catch (unfollowErr) {
+            console.error("[LockedIn] unfollow failed:", unfollowErr);
+            if (wasAccepted) {
+              setFollowingIds((prev) => (prev.includes(friendId) ? prev : [...prev, friendId]));
+            } else {
+              setPendingOutgoingFollowIds((prev) =>
+                prev.includes(friendId) ? prev : [...prev, friendId],
+              );
+            }
+          }
+          return;
+        }
+        const dir = await getDocFromServer(doc(db, USER_DIRECTORY_COLLECTION, friendId));
+        const serverPrivate =
+          dir.exists() &&
+          (dir.data().isPrivate === true || dir.data().accountPublic === false);
+        applyLocalFollowUi(serverPrivate);
+        await requestOrAcceptFollow(db, firebaseUser.uid, friendId, serverPrivate);
+      } catch (e) {
+        console.error("[LockedIn] toggleFollow failed:", e);
+        followAcceptedInFlight.current.delete(friendId);
+        followPendingInFlight.current.delete(friendId);
+        setFollowingIds((prev) => prev.filter((x) => x !== friendId));
+        setPendingOutgoingFollowIds((prev) => prev.filter((x) => x !== friendId));
+        throw e instanceof Error ? e : new Error("Follow request failed.");
+      }
+    },
+    [firebaseUser],
+  );
 
   const isFollowing = useCallback(
     (friendId: string) => followingIds.includes(friendId),
     [followingIds],
+  );
+
+  const hasPendingFollowRequest = useCallback(
+    (friendId: string) => pendingOutgoingFollowIds.includes(friendId),
+    [pendingOutgoingFollowIds],
+  );
+
+  const acceptFollowRequest = useCallback(
+    async (followerUid: string) => {
+      const db = getFirestoreDb();
+      if (!db || !firebaseUser) return;
+      await acceptFollowRequestDoc(db, firebaseUser.uid, followerUid);
+    },
+    [firebaseUser],
+  );
+
+  const rejectFollowRequest = useCallback(
+    async (followerUid: string) => {
+      const db = getFirestoreDb();
+      if (!db || !firebaseUser) return;
+      await rejectFollowRequestDoc(db, firebaseUser.uid, followerUid);
+    },
+    [firebaseUser],
   );
 
   const getFriend = useCallback(
@@ -450,6 +774,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const seedDirectoryUser = useCallback((u: DirectoryUser) => {
+    const isPrivate = u.isPrivate === true || u.accountPublic === false;
     setDirectoryById((prev) => ({
       ...prev,
       [u.uid]: {
@@ -457,8 +782,10 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         displayName: u.displayName,
         handle: u.handle,
         mark: u.avatarEmoji ?? "○",
-        bio: "",
+        bio: u.bio ?? "",
         blocks: [],
+        isPrivate,
+        accountPublic: !isPrivate,
       },
     }));
   }, []);
@@ -466,6 +793,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       tick,
+      todayKey,
       profile,
       setProfile,
       blocks,
@@ -474,9 +802,16 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       updateBlock,
       removeBlock,
       setBlockOutcome,
+      mergeBlockIntoDay,
       followingIds,
+      followerIds,
+      pendingOutgoingFollowIds,
+      pendingIncomingFollows,
       toggleFollow,
       isFollowing,
+      hasPendingFollowRequest,
+      acceptFollowRequest,
+      rejectFollowRequest,
       friends: DEMO_FRIENDS,
       getFriend,
       celebrities: CELEBRITY_ARCHETYPES,
@@ -502,6 +837,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     }),
     [
       tick,
+      todayKey,
       profile,
       setProfile,
       blocks,
@@ -510,9 +846,16 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       updateBlock,
       removeBlock,
       setBlockOutcome,
+      mergeBlockIntoDay,
       followingIds,
+      followerIds,
+      pendingOutgoingFollowIds,
+      pendingIncomingFollows,
       toggleFollow,
       isFollowing,
+      hasPendingFollowRequest,
+      acceptFollowRequest,
+      rejectFollowRequest,
       getFriend,
       pulse,
       setPulse,

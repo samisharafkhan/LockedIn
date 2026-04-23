@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { isFirebaseAuthConfigured } from "../lib/firebaseApp";
 import { BottomNav, type TabId } from "../components/BottomNav";
-import { CelebritiesPanel } from "../components/CelebritiesPanel";
+import { DiscoverPanel } from "../components/DiscoverPanel";
 import { FriendsPanel } from "../components/FriendsPanel";
 import { Onboarding } from "../components/Onboarding";
 import { ProfilePanel } from "../components/ProfilePanel";
@@ -20,7 +20,7 @@ import { WelcomePage } from "../pages/WelcomePage";
 import { useState } from "react";
 
 function Shell() {
-  const { profile, t } = useSchedule();
+  const { profile, t, pendingIncomingFollows } = useSchedule();
   const [tab, setTab] = useState<TabId>("build");
   const [headerPhotoOpen, setHeaderPhotoOpen] = useState(false);
 
@@ -58,17 +58,19 @@ function Shell() {
       <main className="main">
         {tab === "build" ? <SchedulePanel /> : null}
         {tab === "friends" ? <FriendsPanel /> : null}
-        {tab === "stars" ? <CelebritiesPanel /> : null}
+        {tab === "discover" ? <DiscoverPanel /> : null}
         {tab === "profile" ? <ProfilePanel /> : null}
       </main>
 
       <BottomNav
         tab={tab}
         onChange={setTab}
+        friendsRequestCount={pendingIncomingFollows.length}
+        profileRequestCount={pendingIncomingFollows.length}
         labels={{
           build: t("nav_build"),
           friends: t("nav_friends"),
-          stars: t("nav_stars"),
+          discover: t("nav_discover"),
           profile: t("nav_profile"),
         }}
       />

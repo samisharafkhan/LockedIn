@@ -1,18 +1,108 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Private app state per user — each user may only write their own doc.
-    // Any signed-in user may read (needed to compare today’s schedule with someone you follow).
-    // Tighten to "followers only" later if you need stricter privacy.
+
+    function userDirData(uid) {
+      return get(/databases/$(database)/documents/userDirectory/$(uid)).data;
+    }
+
+    function profileIsPrivate(uid) {
+      return exists(/databases/$(database)/documents/userDirectory/$(uid)) &&
+        (userDirData(uid).isPrivate == true || userDirData(uid).accountPublic == false);
+    }
+
+    function targetIsPrivate(followingUid) {
+      return profileIsPrivate(followingUid);
+    }
+
+    function followDocId(follower, following) {
+      return follower + '_' + following;
+    }
+
+    function hasAcceptedFollow(viewer, target) {
+      return exists(/databases/$(database)/documents/follows/$(followDocId(viewer, target))) &&
+        get(/databases/$(database)/documents/follows/$(followDocId(viewer, target))).data.status == 'accepted';
+    }
+
     match /userState/{userId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        !exists(/databases/$(database)/documents/userDirectory/$(userId)) ||
+        !profileIsPrivate(userId) ||
+        hasAcceptedFollow(request.auth.uid, userId)
+      );
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /userDirectory/{userId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Public directory for Instagram-style search (handle / display name).
-    match /userDirectory/{userId} {
+    match /publishedSchedules/{ownerUid} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == ownerUid;
+    }
+
+    match /follows/{followId} {
+      // Allow get/list on missing docs (resource.data is not yours on empty docs — would deny otherwise).
+      allow read: if request.auth != null && (
+        !exists(/databases/$(database)/documents/follows/$(followId)) ||
+        resource.data.followerUid == request.auth.uid ||
+        resource.data.followingUid == request.auth.uid
+      );
+      allow create: if request.auth != null &&
+        followId == request.resource.data.followerUid + '_' + request.resource.data.followingUid &&
+        request.resource.data.followerUid == request.auth.uid &&
+        request.resource.data.followerUid != request.resource.data.followingUid &&
+        (
+          (request.resource.data.status == 'pending' && targetIsPrivate(request.resource.data.followingUid)) ||
+          (request.resource.data.status == 'accepted' && !targetIsPrivate(request.resource.data.followingUid))
+        );
+      allow update: if request.auth != null && (
+        (
+          resource.data.followingUid == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status == 'accepted' &&
+          request.resource.data.followerUid == resource.data.followerUid &&
+          request.resource.data.followingUid == resource.data.followingUid
+        ) ||
+        (
+          resource.data.followerUid == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.followerUid == resource.data.followerUid &&
+          request.resource.data.followingUid == resource.data.followingUid
+        )
+      );
+      allow delete: if request.auth != null && (
+        resource.data.followerUid == request.auth.uid ||
+        resource.data.followingUid == request.auth.uid
+      );
+    }
+
+    match /blockShares/{shareId} {
+      allow read: if request.auth != null && (
+        !exists(/databases/$(database)/documents/blockShares/$(shareId)) ||
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.recipientUid == request.auth.uid
+      );
+      allow create: if request.auth != null &&
+        request.resource.data.ownerUid == request.auth.uid;
+      allow update: if request.auth != null &&
+        (resource.data.ownerUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
+      allow delete: if request.auth != null && resource.data.ownerUid == request.auth.uid;
+
+      match /comments/{commentId} {
+        allow read: if request.auth != null &&
+          (get(/databases/$(database)/documents/blockShares/$(shareId)).data.ownerUid == request.auth.uid ||
+           get(/databases/$(database)/documents/blockShares/$(shareId)).data.recipientUid == request.auth.uid);
+        allow create: if request.auth != null &&
+          request.resource.data.authorUid == request.auth.uid &&
+          (get(/databases/$(database)/documents/blockShares/$(shareId)).data.ownerUid == request.auth.uid ||
+           get(/databases/$(database)/documents/blockShares/$(shareId)).data.recipientUid == request.auth.uid);
+        allow update, delete: if false;
+      }
     }
   }
 }

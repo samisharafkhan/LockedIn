@@ -7,12 +7,15 @@ export type MePrefs = {
   blockReminders: boolean;
   /** Show “active now” style presence in Friends (demo only). */
   activityStatus: boolean;
+  /** Dark theme (stored locally). */
+  darkMode: boolean;
 };
 
 const defaults: MePrefs = {
   tipsInApp: true,
   blockReminders: true,
   activityStatus: true,
+  darkMode: false,
 };
 
 function parse(raw: string | null): MePrefs {
@@ -23,6 +26,7 @@ function parse(raw: string | null): MePrefs {
       tipsInApp: typeof v.tipsInApp === "boolean" ? v.tipsInApp : defaults.tipsInApp,
       blockReminders: typeof v.blockReminders === "boolean" ? v.blockReminders : defaults.blockReminders,
       activityStatus: typeof v.activityStatus === "boolean" ? v.activityStatus : defaults.activityStatus,
+      darkMode: typeof v.darkMode === "boolean" ? v.darkMode : defaults.darkMode,
     };
   } catch {
     return { ...defaults };
@@ -35,4 +39,10 @@ export function loadMePrefs(): MePrefs {
 
 export function saveMePrefs(next: MePrefs): void {
   localStorage.setItem(ME_PREFS_KEY, JSON.stringify(next));
+}
+
+/** Apply `data-theme` from saved preferences (call on app load and after toggling dark mode). */
+export function applyThemeFromPrefs(): void {
+  const p = loadMePrefs();
+  document.documentElement.setAttribute("data-theme", p.darkMode ? "dark" : "light");
 }

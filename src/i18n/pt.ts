@@ -47,7 +47,7 @@ export const pt: Record<string, string> = {
 
   nav_build: "Dia",
   nav_friends: "Amigos",
-  nav_stars: "Estrelas",
+  nav_discover: "Descobrir",
   nav_profile: "Tu",
 
   app_tagline: "Construa o seu dia, alinhe com amigos.",

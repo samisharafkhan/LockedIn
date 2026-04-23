@@ -2,7 +2,9 @@ import type { Firestore } from "firebase/firestore";
 import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { isoDate } from "./dates";
 import { getFirestoreDb } from "./firebaseApp";
+import { hasAcceptedFollow } from "./follows";
 import type { ActivityId, Profile, TimeBlock } from "../types";
+import type { StoredBlock } from "./storage";
 
 export const USER_DIRECTORY_COLLECTION = "userDirectory";
 
@@ -11,7 +13,33 @@ export type DirectoryUser = {
   handle: string;
   displayName: string;
   avatarEmoji?: string;
+  bio?: string;
+  /** Private account (follow requests). */
+  isPrivate?: boolean;
+  /** @deprecated use isPrivate */
+  accountPublic?: boolean;
 };
+
+export function directoryUserFromFirestoreData(uid: string, x: Record<string, unknown>): DirectoryUser {
+  const isPrivate = x.isPrivate === true || x.accountPublic === false;
+  const bioRaw = x.bio;
+  return {
+    uid,
+    handle: String(x.handle ?? ""),
+    displayName: String(x.displayName ?? ""),
+    avatarEmoji: x.avatarEmoji != null ? String(x.avatarEmoji) : undefined,
+    bio: typeof bioRaw === "string" ? bioRaw.slice(0, 160) : undefined,
+    isPrivate,
+    accountPublic: !isPrivate,
+  };
+}
+
+/** Full directory row for a single uid (profile preview, bios). */
+export async function fetchDirectoryUser(db: Firestore, uid: string): Promise<DirectoryUser | null> {
+  const snap = await getDoc(doc(db, USER_DIRECTORY_COLLECTION, uid));
+  if (!snap.exists()) return null;
+  return directoryUserFromFirestoreData(snap.id, snap.data() as Record<string, unknown>);
+}
 
 export function normalizeHandleKey(handle: string): string {
   return handle
@@ -23,6 +51,8 @@ export function normalizeHandleKey(handle: string): string {
 
 /** Fields merged into `userDirectory/{uid}` (add serverTimestamp in caller). */
 export function userDirectoryWriteFields(uid: string, profile: Profile): Record<string, unknown> {
+  const priv = profile.isPrivate === true || profile.accountPublic === false;
+  const pub = !priv;
   return {
     uid,
     handle: profile.handle.trim(),
@@ -30,7 +60,32 @@ export function userDirectoryWriteFields(uid: string, profile: Profile): Record<
     handleLower: normalizeHandleKey(profile.handle),
     displayNameLower: profile.displayName.trim().toLowerCase(),
     avatarEmoji: profile.avatarEmoji ?? "○",
+    isPrivate: priv,
+    accountPublic: pub,
+    publishTodayToDiscover: pub && profile.publishTodayToDiscover === true,
+    bio: (profile.bio ?? "").trim().slice(0, 160),
   };
+}
+
+/** Exact handle match (for sharing / invites). Requires `handleLower` on directory docs. */
+export async function fetchUserByHandleExact(
+  db: Firestore,
+  handle: string,
+  excludeUid: string,
+): Promise<DirectoryUser | null> {
+  const key = normalizeHandleKey(handle);
+  if (key.length < 1) return null;
+  const q = query(
+    collection(db, USER_DIRECTORY_COLLECTION),
+    where("handleLower", "==", key),
+    limit(5),
+  );
+  const snap = await getDocs(q);
+  for (const d of snap.docs) {
+    if (d.id === excludeUid) continue;
+    return directoryUserFromFirestoreData(d.id, d.data() as Record<string, unknown>);
+  }
+  return null;
 }
 
 export async function searchDirectoryUsers(
@@ -62,13 +117,7 @@ export async function searchDirectoryUsers(
     snap.forEach((d) => {
       const uid = d.id;
       if (uid === excludeUid) return;
-      const x = d.data();
-      map.set(uid, {
-        uid,
-        handle: String(x.handle ?? ""),
-        displayName: String(x.displayName ?? ""),
-        avatarEmoji: x.avatarEmoji != null ? String(x.avatarEmoji) : undefined,
-      });
+      map.set(uid, directoryUserFromFirestoreData(uid, d.data() as Record<string, unknown>));
     });
   }
 
@@ -91,15 +140,66 @@ function mapDocToTimeBlock(raw: unknown): TimeBlock | null {
   };
 }
 
-/** Today’s blocks for another user from their `userState` doc (requires Firestore read rules). */
-export async function fetchUserTodayBlocks(uid: string): Promise<TimeBlock[]> {
+/** Today’s blocks for another user from their `userState` doc (server rules enforce private access). */
+export async function fetchUserTodayBlocks(ownerUid: string, viewerUid: string | null): Promise<TimeBlock[]> {
   const db = getFirestoreDb();
   if (!db) return [];
-  const snap = await getDoc(doc(db, "userState", uid));
-  if (!snap.exists()) return [];
-  const data = snap.data() as { blocksByDay?: Record<string, unknown[]> };
-  const day = isoDate(new Date());
-  const list = data.blocksByDay?.[day];
-  if (!Array.isArray(list)) return [];
-  return list.map(mapDocToTimeBlock).filter((x): x is TimeBlock => x != null);
+
+  const dirSnap = await getDoc(doc(db, USER_DIRECTORY_COLLECTION, ownerUid));
+  if (dirSnap.exists()) {
+    const d = dirSnap.data();
+    const priv = d.isPrivate === true || d.accountPublic === false;
+    if (priv && viewerUid !== null && viewerUid !== ownerUid) {
+      const ok = await hasAcceptedFollow(db, viewerUid, ownerUid);
+      if (!ok) return [];
+    }
+  }
+
+  try {
+    const snap = await getDoc(doc(db, "userState", ownerUid));
+    if (!snap.exists()) return [];
+    const data = snap.data() as { blocksByDay?: Record<string, unknown[]> };
+    const day = isoDate(new Date());
+    const list = data.blocksByDay?.[day];
+    if (!Array.isArray(list)) return [];
+    return list.map(mapDocToTimeBlock).filter((x): x is TimeBlock => x != null);
+  } catch {
+    return [];
+  }
+}
+
+export type PublishedScheduleDoc = {
+  ownerUid: string;
+  dayKey: string;
+  handle: string;
+  displayName: string;
+  avatarEmoji?: string;
+  bio?: string;
+  blocks: StoredBlock[];
+};
+
+export async function fetchPublishedSchedulesForDay(dayKey: string): Promise<PublishedScheduleDoc[]> {
+  const db = getFirestoreDb();
+  if (!db) return [];
+  const q = query(
+    collection(db, "publishedSchedules"),
+    where("dayKey", "==", dayKey),
+    limit(40),
+  );
+  const snap = await getDocs(q);
+  const out: PublishedScheduleDoc[] = [];
+  snap.forEach((d) => {
+    const x = d.data();
+    const bioRaw = x.bio;
+    out.push({
+      ownerUid: String(x.ownerUid ?? d.id),
+      dayKey: String(x.dayKey ?? dayKey),
+      handle: String(x.handle ?? ""),
+      displayName: String(x.displayName ?? ""),
+      avatarEmoji: x.avatarEmoji != null ? String(x.avatarEmoji) : undefined,
+      bio: typeof bioRaw === "string" ? bioRaw.slice(0, 160) : undefined,
+      blocks: Array.isArray(x.blocks) ? (x.blocks as PublishedScheduleDoc["blocks"]) : [],
+    });
+  });
+  return out;
 }

@@ -1,28 +1,17 @@
 import { useEffect, useState } from "react";
-import { Trash2, X } from "lucide-react";
+import { Share2, Trash2, X } from "lucide-react";
 import { ACTIVITIES } from "../data/activities";
 import type { ActivityId, TimeBlock } from "../types";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
+import { TimeDigitPick } from "./TimeDigitPick";
+import { hasConflict, isValidRange } from "../lib/scheduleBlocks";
 import {
-  formatTimeValue,
-  hasConflict,
-  isValidRange,
-  parseTimeValue,
-} from "../lib/scheduleBlocks";
-
-/** `<input type="time">` may emit `HH:MM:SS`; normalize so parsing and display stay in sync. */
-function normalizeTimeFieldInput(value: string) {
-  const raw = value.trim();
-  const m = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?/);
-  if (!m) return raw;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  if (!Number.isFinite(h) || !Number.isFinite(min)) return raw;
-  const hh = Math.min(23, Math.max(0, h));
-  const mm = Math.min(59, Math.max(0, min));
-  return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
-}
+  digitsPeriodToHour24,
+  hour24ToDigitsAndPeriod,
+  timeDigitsIssues,
+  type AmPm,
+} from "../lib/timeDigits";
 
 type Mode = { kind: "add"; defaults: Omit<TimeBlock, "id" | "activityId"> & { activityId: ActivityId } } | {
   kind: "edit";
@@ -36,13 +25,17 @@ type Props = {
   onClose: () => void;
   onSave: (block: Omit<TimeBlock, "id"> & { id?: string }) => void;
   onDelete?: (id: string) => void;
+  onShare?: () => void;
 };
 
-export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }: Props) {
+export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete, onShare }: Props) {
   const { t } = useSchedule();
   const [activityId, setActivityId] = useState<ActivityId>("work");
-  const [startStr, setStartStr] = useState("09:00");
-  const [endStr, setEndStr] = useState("10:00");
+  const [startDigits, setStartDigits] = useState("");
+  const [startPeriod, setStartPeriod] = useState<AmPm>("AM");
+  const [endDigits, setEndDigits] = useState("");
+  const [endPeriod, setEndPeriod] = useState<AmPm>("PM");
+  const [endMidnight, setEndMidnight] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -50,18 +43,34 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
     if (mode.kind === "edit") {
       const b = mode.block;
       setActivityId(b.activityId);
-      setStartStr(formatTimeValue(b.startHour, b.startMinute));
-      setEndStr(
-        b.endHour === 24 && b.endMinute === 0 ? "24:00" : formatTimeValue(b.endHour, b.endMinute),
-      );
+      const s = hour24ToDigitsAndPeriod(b.startHour, b.startMinute);
+      setStartDigits(s.digits);
+      setStartPeriod(s.period);
+      if (b.endHour === 24 && b.endMinute === 0) {
+        setEndMidnight(true);
+        setEndDigits("");
+        setEndPeriod("PM");
+      } else {
+        setEndMidnight(false);
+        const e = hour24ToDigitsAndPeriod(b.endHour, b.endMinute);
+        setEndDigits(e.digits);
+        setEndPeriod(e.period);
+      }
     } else {
       setActivityId(mode.defaults.activityId);
-      setStartStr(formatTimeValue(mode.defaults.startHour, mode.defaults.startMinute));
-      setEndStr(
-        mode.defaults.endHour === 24 && mode.defaults.endMinute === 0
-          ? "24:00"
-          : formatTimeValue(mode.defaults.endHour, mode.defaults.endMinute),
-      );
+      const s = hour24ToDigitsAndPeriod(mode.defaults.startHour, mode.defaults.startMinute);
+      setStartDigits(s.digits);
+      setStartPeriod(s.period);
+      if (mode.defaults.endHour === 24 && mode.defaults.endMinute === 0) {
+        setEndMidnight(true);
+        setEndDigits("");
+        setEndPeriod("PM");
+      } else {
+        setEndMidnight(false);
+        const e = hour24ToDigitsAndPeriod(mode.defaults.endHour, mode.defaults.endMinute);
+        setEndDigits(e.digits);
+        setEndPeriod(e.period);
+      }
     }
     setError(null);
   }, [open, mode]);
@@ -78,22 +87,55 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
   if (!open || !mode) return null;
 
   const submit = () => {
-    const s = parseTimeValue(startStr);
-    const eParsed = parseTimeValue(endStr);
-    if (!s || !eParsed) {
-      setError(t("block_err_time_format"));
+    if (startDigits.length !== 4) {
+      setError(t("block_err_time_incomplete"));
       return;
     }
-    if (!isValidRange(s.hour, s.minute, eParsed.hour, eParsed.minute)) {
+    const startIssues = timeDigitsIssues(startDigits);
+    if (startIssues.hour || startIssues.minute) {
+      setError(t("block_err_time_invalid"));
+      return;
+    }
+    const s24 = digitsPeriodToHour24(startDigits, startPeriod);
+    if (!s24) {
+      setError(t("block_err_time_invalid"));
+      return;
+    }
+
+    let endHour: number;
+    let endMinute: number;
+    if (endMidnight) {
+      endHour = 24;
+      endMinute = 0;
+    } else {
+      if (endDigits.length !== 4) {
+        setError(t("block_err_time_incomplete"));
+        return;
+      }
+      const endIssues = timeDigitsIssues(endDigits);
+      if (endIssues.hour || endIssues.minute) {
+        setError(t("block_err_time_invalid"));
+        return;
+      }
+      const e24 = digitsPeriodToHour24(endDigits, endPeriod);
+      if (!e24) {
+        setError(t("block_err_time_invalid"));
+        return;
+      }
+      endHour = e24.hour;
+      endMinute = e24.minute;
+    }
+
+    if (!isValidRange(s24.hour, s24.minute, endHour, endMinute)) {
       setError(t("block_err_range"));
       return;
     }
     const candidate = {
       id: mode.kind === "edit" ? mode.block.id : undefined,
-      startHour: s.hour,
-      startMinute: s.minute,
-      endHour: eParsed.hour,
-      endMinute: eParsed.minute,
+      startHour: s24.hour,
+      startMinute: s24.minute,
+      endHour,
+      endMinute,
       activityId,
     };
     if (hasConflict(allBlocks, candidate)) {
@@ -113,7 +155,7 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
   };
 
   return (
-    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div className="sheet sheet--fullscreen" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
       <button
         type="button"
         className="sheet__backdrop"
@@ -127,9 +169,16 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
             <h2 id="sheet-title" className="sheet__title">
               {mode.kind === "edit" ? t("block_edit_title") : t("block_new_title")}
             </h2>
-            <button type="button" className="icon-btn" onClick={onClose} aria-label={t("block_close")}>
-              <X size={22} strokeWidth={2} />
-            </button>
+            <div className="sheet__top-actions">
+              {mode.kind === "edit" && onShare ? (
+                <button type="button" className="icon-btn" onClick={onShare} aria-label={t("block_share")}>
+                  <Share2 size={22} strokeWidth={2} />
+                </button>
+              ) : null}
+              <button type="button" className="icon-btn" onClick={onClose} aria-label={t("block_close")}>
+                <X size={22} strokeWidth={2} />
+              </button>
+            </div>
           </div>
         </div>
         <div className="sheet__body">
@@ -156,36 +205,48 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete }:
             ))}
           </div>
 
-          <div className="time-grid">
-            <label className="time-field">
-              <span className="time-field__label">{t("block_starts")}</span>
-              <input
-                className="time-field__input"
-                type="time"
-                value={startStr.length >= 5 ? startStr.slice(0, 5) : "09:00"}
-                onChange={(ev) => setStartStr(normalizeTimeFieldInput(ev.target.value))}
-                step={300}
-              />
-            </label>
-            <label className="time-field">
-              <span className="time-field__label">{t("block_ends")}</span>
-              <input
-                className="time-field__input"
-                type="text"
-                inputMode="text"
-                placeholder={t("block_ends_ph")}
-                value={endStr}
-                onChange={(ev) => setEndStr(ev.target.value)}
-                autoComplete="off"
-              />
-            </label>
+          <p className="sheet__section-label">{t("block_times_label")}</p>
+          <p className="sheet__micro">{t("block_time_digits_hint")}</p>
+          <div className="time-digit-grid">
+            <TimeDigitPick
+              label={t("block_starts")}
+              digits={startDigits}
+              period={startPeriod}
+              onDigitsChange={setStartDigits}
+              onPeriodChange={setStartPeriod}
+            />
+            <TimeDigitPick
+              label={t("block_ends")}
+              digits={endDigits}
+              period={endPeriod}
+              onDigitsChange={setEndDigits}
+              onPeriodChange={setEndPeriod}
+              disabled={endMidnight}
+            />
           </div>
-          <p className="sheet__micro">{t("block_tip_midnight")}</p>
+          <label className="time-digit-midnight">
+            <input
+              type="checkbox"
+              checked={endMidnight}
+              onChange={(e) => {
+                setEndMidnight(e.target.checked);
+                setError(null);
+              }}
+            />
+            <span>{t("block_ends_midnight")}</span>
+          </label>
+          <p className="sheet__micro">{t("block_tip_midnight_short")}</p>
 
           {error ? <p className="sheet__error">{error}</p> : null}
         </div>
 
         <div className="sheet__footer">
+          {mode.kind === "edit" && onShare ? (
+            <button type="button" className="btn btn--outline btn--wide sheet__share-first" onClick={onShare}>
+              <Share2 size={18} strokeWidth={2} aria-hidden />
+              {t("block_share")}
+            </button>
+          ) : null}
           <div className="sheet__actions sheet__actions--footer">
             {mode.kind === "edit" && onDelete ? (
               <button type="button" className="btn btn--danger-ghost" onClick={del}>

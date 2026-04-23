@@ -7,9 +7,18 @@ import { getFirebaseAuth } from "../lib/firebaseApp";
 import { needsEmailVerification } from "../lib/authHelpers";
 import type { AppLocale } from "../i18n/locales";
 
+const RECAPTCHA_CONTAINER_ID = "lockedin-phone-recaptcha";
+
 function authLanguageFromLocale(locale: AppLocale): string {
   if (locale === "pt") return "pt-BR";
   return locale;
+}
+
+function readFirebaseAuthCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const o = err as Record<string, unknown>;
+  if (typeof o.code === "string") return o.code;
+  return undefined;
 }
 
 export function PhoneAuthPage() {
@@ -22,7 +31,6 @@ export function PhoneAuthPage() {
   const [busy, setBusy] = useState(false);
   const confirmRef = useRef<ConfirmationResult | null>(null);
   const verifierRef = useRef<RecaptchaVerifier | null>(null);
-  const sendBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (firebaseUser && !needsEmailVerification(firebaseUser)) {
@@ -48,25 +56,33 @@ export function PhoneAuthPage() {
     }
 
     const auth = getFirebaseAuth();
-    const btn = sendBtnRef.current;
-    if (!auth || !btn) return;
+    if (!auth) return;
 
-    try {
-      verifierRef.current?.clear();
-    } catch {
-      /* ignore */
-    }
-
-    try {
-      verifierRef.current = new RecaptchaVerifier(auth, btn, {
-        size: "invisible",
-        callback: () => {},
-      });
-    } catch {
-      setErr(t("err_auth_recaptcha_failed"));
-    }
+    let cancelled = false;
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      try {
+        verifierRef.current?.clear();
+      } catch {
+        /* ignore */
+      }
+      verifierRef.current = null;
+      const el = document.getElementById(RECAPTCHA_CONTAINER_ID);
+      if (!el) return;
+      try {
+        verifierRef.current = new RecaptchaVerifier(auth, el, {
+          size: "invisible",
+          callback: () => {},
+        });
+      } catch (e) {
+        console.error("[LockedIn] RecaptchaVerifier setup failed:", e);
+        setErr(t("err_auth_recaptcha_failed"));
+      }
+    });
 
     return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
       try {
         verifierRef.current?.clear();
       } catch {
@@ -90,24 +106,24 @@ export function PhoneAuthPage() {
     }
     setBusy(true);
     try {
-      const normalized = phone.trim().startsWith("+")
-        ? phone.trim()
-        : `+${phone.trim().replace(/^\+/, "")}`;
+      const raw = phone.trim().replace(/\s+/g, "");
+      const normalized = raw.startsWith("+") ? raw : `+${raw.replace(/^\+/, "")}`;
       confirmRef.current = await signInWithPhoneNumber(auth, normalized, v);
       setStep("code");
     } catch (e: unknown) {
-      const codeErr = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : undefined;
+      console.error("[LockedIn] signInWithPhoneNumber failed:", e);
+      const codeErr = readFirebaseAuthCode(e);
       setErr(t(authErrorToKey(codeErr)));
       try {
         verifierRef.current?.clear();
       } catch {
         /* ignore */
       }
-      const a = getFirebaseAuth();
-      const btn = sendBtnRef.current;
-      if (a && btn && step === "phone") {
+      verifierRef.current = null;
+      const el = document.getElementById(RECAPTCHA_CONTAINER_ID);
+      if (el && step === "phone" && getFirebaseAuth()) {
         try {
-          verifierRef.current = new RecaptchaVerifier(a, btn, {
+          verifierRef.current = new RecaptchaVerifier(getFirebaseAuth()!, el, {
             size: "invisible",
             callback: () => {},
           });
@@ -127,7 +143,8 @@ export function PhoneAuthPage() {
       await confirmRef.current?.confirm(code.trim());
       navigate("/", { replace: true });
     } catch (e: unknown) {
-      const codeErr = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : undefined;
+      console.error("[LockedIn] phone confirm failed:", e);
+      const codeErr = readFirebaseAuthCode(e);
       setErr(t(authErrorToKey(codeErr)));
     } finally {
       setBusy(false);
@@ -141,6 +158,8 @@ export function PhoneAuthPage() {
         <h1 className="onboard__title">{t("phone_title")}</h1>
         <p className="onboard__lede">{t("phone_subtitle")}</p>
         <p className="onboard__hint">{t("phone_console_hint")}</p>
+
+        <div id={RECAPTCHA_CONTAINER_ID} className="auth-recaptcha-host" aria-hidden="true" />
 
         {step === "phone" ? (
           <>
@@ -178,13 +197,7 @@ export function PhoneAuthPage() {
         {err ? <p className="onboard__err">{err}</p> : null}
 
         {step === "phone" ? (
-          <button
-            ref={sendBtnRef}
-            type="button"
-            className="btn btn--primary btn--wide"
-            disabled={busy}
-            onClick={() => void sendCode()}
-          >
+          <button type="button" className="btn btn--primary btn--wide" disabled={busy} onClick={() => void sendCode()}>
             {busy ? t("phone_loading") : t("phone_send_code")}
           </button>
         ) : (

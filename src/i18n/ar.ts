@@ -52,7 +52,7 @@ export const ar: Record<string, string> = {
 
   nav_build: "اليوم",
   nav_friends: "الأصدقاء",
-  nav_stars: "نجوم",
+  nav_discover: "استكشف",
   nav_profile: "أنت",
 
   app_tagline: "ابنِ يومك، وانسجم مع أصدقائك.",

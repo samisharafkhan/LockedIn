@@ -27,6 +27,12 @@ export function authErrorToKey(code: string | undefined): string {
       return "err_auth_recaptcha_failed";
     case "auth/quota-exceeded":
       return "err_auth_quota_sms";
+    case "auth/network-request-failed":
+      return "err_auth_network";
+    case "auth/unauthorized-domain":
+      return "err_auth_unauthorized_domain";
+    case "auth/web-storage-unsupported":
+      return "err_auth_web_storage";
     default:
       return "err_generic";
   }

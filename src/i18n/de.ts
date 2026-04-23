@@ -48,7 +48,7 @@ export const de: Record<string, string> = {
 
   nav_build: "Tag",
   nav_friends: "Freunde",
-  nav_stars: "Stars",
+  nav_discover: "Entdecken",
   nav_profile: "Du",
 
   app_tagline: "Gestalte deinen Tag, stimme dich mit Freunden ab.",

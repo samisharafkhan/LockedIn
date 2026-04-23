@@ -69,7 +69,7 @@ export const es: Record<string, string> = {
 
   nav_build: "Plan",
   nav_friends: "Amigos",
-  nav_stars: "Estrellas",
+  nav_discover: "Descubrir",
   nav_profile: "Tú",
 
   app_tagline:

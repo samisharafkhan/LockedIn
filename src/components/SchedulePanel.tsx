@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
+import { BlockShareSheet, IncomingShareSheet } from "./EventShareSheets";
 import { BlockSheet } from "./BlockSheet";
+import { subscribeIncomingShares } from "../lib/blockShares";
 import type { BlockOutcome, TimeBlock } from "../types";
 import {
   blockEndMinutesExclusive,
@@ -51,16 +53,38 @@ function progress01(b: TimeBlock, nowMin: number) {
 }
 
 export function SchedulePanel() {
-  const { blocks, profile, addBlock, updateBlock, removeBlock, setBlockOutcome, tick, t } =
-    useSchedule();
+  const {
+    blocks,
+    profile,
+    addBlock,
+    updateBlock,
+    removeBlock,
+    setBlockOutcome,
+    tick,
+    t,
+    firebaseUser,
+    todayKey,
+  } = useSchedule();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetMode, setSheetMode] = useState<
     | { kind: "add"; defaults: Omit<TimeBlock, "id"> }
     | { kind: "edit"; block: TimeBlock }
     | null
   >(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareBlock, setShareBlock] = useState<TimeBlock | null>(null);
+  const [incomingShareIds, setIncomingShareIds] = useState<string[]>([]);
+  const [openIncomingShareId, setOpenIncomingShareId] = useState<string | null>(null);
 
   const nowMin = useMemo(() => minutesSinceMidnight(new Date()), [tick, blocks]);
+
+  useEffect(() => {
+    if (!firebaseUser) {
+      setIncomingShareIds([]);
+      return;
+    }
+    return subscribeIncomingShares(firebaseUser.uid, setIncomingShareIds);
+  }, [firebaseUser]);
 
   const pending = useMemo(() => blocks.filter((b) => needsCheckIn(b, nowMin)), [blocks, nowMin]);
 
@@ -85,6 +109,14 @@ export function SchedulePanel() {
   const openEdit = (b: TimeBlock) => {
     setSheetMode({ kind: "edit", block: b });
     setSheetOpen(true);
+  };
+
+  const openShareFromSheet = () => {
+    if (sheetMode?.kind !== "edit") return;
+    setShareBlock(sheetMode.block);
+    setSheetOpen(false);
+    setSheetMode(null);
+    setShareOpen(true);
   };
 
   const onSave = (payload: Omit<TimeBlock, "id"> & { id?: string }) => {
@@ -125,6 +157,21 @@ export function SchedulePanel() {
           <AvatarDisplay source={profile} size="md" />
         </button>
       </div>
+
+      {incomingShareIds.length > 0 && firebaseUser ? (
+        <div className="share-inbox" role="region" aria-label={t("share_inbox_label")}>
+          <p className="share-inbox__title">{t("share_inbox_title", { n: String(incomingShareIds.length) })}</p>
+          <ul className="share-inbox__list">
+            {incomingShareIds.map((id) => (
+              <li key={id}>
+                <button type="button" className="share-inbox__open" onClick={() => setOpenIncomingShareId(id)}>
+                  {t("share_inbox_open")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {pending.length ? (
         <div className="checkin-banner" role="region" aria-label={t("schedule_checkin_title")}>
@@ -238,7 +285,25 @@ export function SchedulePanel() {
         }}
         onSave={onSave}
         onDelete={removeBlock}
+        onShare={firebaseUser ? openShareFromSheet : undefined}
       />
+
+      <BlockShareSheet
+        open={shareOpen}
+        block={shareBlock}
+        dayKey={todayKey}
+        onClose={() => {
+          setShareOpen(false);
+          setShareBlock(null);
+        }}
+      />
+
+      {openIncomingShareId ? (
+        <IncomingShareSheet
+          shareId={openIncomingShareId}
+          onClose={() => setOpenIncomingShareId(null)}
+        />
+      ) : null}
     </section>
   );
 }

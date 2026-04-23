@@ -8,14 +8,15 @@ import {
   HelpCircle,
   Info,
   Globe,
+  Layers,
   LogOut,
   Settings,
   Shield,
+  UserPlus,
   UserRound,
   X,
 } from "lucide-react";
 import { activityById } from "../data/activities";
-import { DEMO_FOLLOWERS } from "../data/demoFollowers";
 import { useSchedule } from "../context/ScheduleContext";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { AvatarPicker } from "./AvatarPicker";
@@ -24,8 +25,10 @@ import { PulsePanel } from "./PulsePanel";
 import { ActivityIcon } from "./ActivityIcon";
 import { hoursByActivityLastNDays, hoursForActivityOnDay } from "../lib/weekStats";
 import { lastNDayKeys, weekdayShort } from "../lib/dates";
-import { loadMePrefs, ME_PREFS_KEY, saveMePrefs, type MePrefs } from "../lib/mePrefs";
+import { applyThemeFromPrefs, loadMePrefs, ME_PREFS_KEY, saveMePrefs, type MePrefs } from "../lib/mePrefs";
 import { APP_VERSION } from "../version";
+import { getFirestoreDb } from "../lib/firebaseApp";
+import { fetchDirectoryUser, type DirectoryUser } from "../lib/userDirectory";
 import type { ActivityId, AvatarFields } from "../types";
 import type { LucideIcon } from "lucide-react";
 
@@ -37,6 +40,7 @@ type MeScreen =
   | "edit-profile"
   | "notifications"
   | "privacy"
+  | "layouts"
   | "data"
   | "help"
   | "about";
@@ -85,15 +89,17 @@ function ToggleRow({
   description,
   checked,
   onChange,
+  disabled,
 }: {
   title: string;
   description: string;
   checked: boolean;
   onChange: (next: boolean) => void;
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
-    <label className="me-toggle" htmlFor={id}>
+    <label className={`me-toggle ${disabled ? "me-toggle--disabled" : ""}`} htmlFor={id}>
       <span className="me-toggle__copy">
         <span className="me-toggle__title">{title}</span>
         <span className="me-toggle__desc">{description}</span>
@@ -103,6 +109,7 @@ function ToggleRow({
         type="checkbox"
         className="me-toggle__input"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="me-toggle__ui" aria-hidden />
@@ -116,17 +123,22 @@ export function ProfilePanel() {
     setProfile,
     scheduleByDay,
     followingIds,
+    followerIds,
     pulse,
     clearPulse,
     getFriend,
     firebaseUser,
     signOutAuth,
+    pendingIncomingFollows,
+    acceptFollowRequest,
+    rejectFollowRequest,
     t,
   } = useSchedule();
   const navigate = useNavigate();
   const [meScreen, setMeScreen] = useState<MeScreen>("profile");
   const [showReset, setShowReset] = useState(false);
   const [name, setName] = useState(profile.displayName);
+  const [bio, setBio] = useState(profile.bio ?? "");
   const [avatar, setAvatar] = useState<AvatarFields>({
     avatarEmoji: profile.avatarEmoji,
     avatarAnimalId: profile.avatarAnimalId ?? null,
@@ -136,24 +148,78 @@ export function ProfilePanel() {
   const [statSheet, setStatSheet] = useState<StatSheet>(null);
   const [heroPhotoOpen, setHeroPhotoOpen] = useState(false);
   const [mePrefs, setMePrefs] = useState<MePrefs>(() => loadMePrefs());
+  const [requesterMap, setRequesterMap] = useState<Record<string, DirectoryUser>>({});
+  const [followerMap, setFollowerMap] = useState<Record<string, DirectoryUser>>({});
 
   useEffect(() => {
     setName(profile.displayName);
+    setBio(profile.bio ?? "");
     setAvatar({
       avatarEmoji: profile.avatarEmoji,
       avatarAnimalId: profile.avatarAnimalId ?? null,
       avatarImageDataUrl: profile.avatarImageDataUrl ?? null,
     });
-  }, [profile.displayName, profile.avatarEmoji, profile.avatarAnimalId, profile.avatarImageDataUrl]);
+  }, [
+    profile.displayName,
+    profile.bio,
+    profile.avatarEmoji,
+    profile.avatarAnimalId,
+    profile.avatarImageDataUrl,
+  ]);
 
   useEffect(() => {
     if (!avatar.avatarImageDataUrl) setHeroPhotoOpen(false);
   }, [avatar.avatarImageDataUrl]);
 
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser || pendingIncomingFollows.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, DirectoryUser> = {};
+      for (const { followerUid } of pendingIncomingFollows) {
+        if (getFriend(followerUid)) continue;
+        const u = await fetchDirectoryUser(db, followerUid);
+        if (u) next[followerUid] = u;
+      }
+      if (!cancelled) {
+        setRequesterMap((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingIncomingFollows, firebaseUser, getFriend]);
+
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser || followerIds.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, DirectoryUser> = {};
+      for (const followerUid of followerIds) {
+        if (getFriend(followerUid)) continue;
+        const u = await fetchDirectoryUser(db, followerUid);
+        if (u) next[followerUid] = u;
+      }
+      if (!cancelled) {
+        setFollowerMap((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [followerIds, firebaseUser, getFriend]);
+
   const patchPrefs = (patch: Partial<MePrefs>) => {
     setMePrefs((prev) => {
       const next = { ...prev, ...patch };
       saveMePrefs(next);
+      queueMicrotask(() => applyThemeFromPrefs());
       return next;
     });
   };
@@ -212,7 +278,7 @@ export function ProfilePanel() {
   const saveProfile = () => {
     const trimmed = name.trim() || profile.displayName;
     const handle = trimmed.toLowerCase().replace(/\s+/g, "") || profile.handle;
-    setProfile({ displayName: trimmed, handle, ...avatar });
+    setProfile({ displayName: trimmed, handle, bio: bio.trim().slice(0, 160), ...avatar });
   };
 
   const resetLocal = () => {
@@ -235,6 +301,51 @@ export function ProfilePanel() {
           <Settings size={22} strokeWidth={2} />
         </button>
       </div>
+
+      {firebaseUser && pendingIncomingFollows.length > 0 ? (
+        <div className="profile__requests" role="region" aria-label={t("friends_requests_title")}>
+          <div className="profile__requests-head">
+            <UserPlus size={20} strokeWidth={2} aria-hidden />
+            <div>
+              <p className="profile__requests-title">{t("friends_requests_title")}</p>
+              <p className="profile__requests-sub">{t("friends_requests_sub")}</p>
+            </div>
+          </div>
+          <ul className="friends__request-list" role="list">
+            {pendingIncomingFollows.map(({ followerUid }) => {
+              const person = getFriend(followerUid) ?? requesterMap[followerUid];
+              return (
+                <li key={followerUid} className="friends__request-row">
+                  <div>
+                    <p className="friends__request-name">
+                      {person?.displayName ?? t("friends_request_unknown")}
+                    </p>
+                    <p className="friends__request-handle">
+                      {person?.handle ? `@${person.handle}` : followerUid.slice(0, 10)}
+                    </p>
+                  </div>
+                  <div className="friends__request-actions">
+                    <button
+                      type="button"
+                      className="btn btn--sm btn--primary"
+                      onClick={() => void acceptFollowRequest(followerUid)}
+                    >
+                      {t("friends_accept")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--sm btn--outline"
+                      onClick={() => void rejectFollowRequest(followerUid)}
+                    >
+                      {t("friends_decline")}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="profile__hero">
         {avatar.avatarImageDataUrl ? (
@@ -262,7 +373,7 @@ export function ProfilePanel() {
               <p className="profile__stat-label">Following</p>
             </button>
             <button type="button" className="profile__stat-btn" onClick={() => openStat("followers")}>
-              <p className="profile__stat-num">{DEMO_FOLLOWERS.length}</p>
+              <p className="profile__stat-num">{followerIds.length}</p>
               <p className="profile__stat-label">Followers</p>
             </button>
             <button type="button" className="profile__stat-btn" onClick={() => openStat("pulse")}>
@@ -270,9 +381,11 @@ export function ProfilePanel() {
               <p className="profile__stat-label">Pulse</p>
             </button>
           </div>
-          <p className="profile__bio">
-            Tap a stat for the full list or a weekly time mix. Weekly cards use saved blocks from Build.
-          </p>
+          {(profile.bio ?? "").trim() ? (
+            <p className="profile__bio profile__bio--filled">{(profile.bio ?? "").trim()}</p>
+          ) : (
+            <p className="profile__bio profile__bio--empty friends__muted">{t("profile_bio_empty")}</p>
+          )}
         </div>
       </div>
 
@@ -322,7 +435,7 @@ export function ProfilePanel() {
           <SettingsNavRow
             Icon={UserRound}
             title="Edit profile"
-            subtitle="Name, photo, avatar"
+            subtitle={t("profile_edit_sub")}
             onClick={() => setMeScreen("edit-profile")}
           />
           <SettingsNavRow
@@ -364,9 +477,21 @@ export function ProfilePanel() {
           />
           <SettingsNavRow
             Icon={Shield}
-            title="Privacy"
-            subtitle="Local data · demo mode"
+            title={t("privacy_title")}
+            subtitle={t("privacy_row_sub")}
             onClick={() => setMeScreen("privacy")}
+          />
+        </div>
+      </div>
+
+      <div className="me-settings-group">
+        <p className="me-settings-group__label">{t("settings_appearance_group")}</p>
+        <div className="me-settings-card">
+          <SettingsNavRow
+            Icon={Layers}
+            title={t("settings_layouts_row_title")}
+            subtitle={t("settings_layouts_row_sub")}
+            onClick={() => setMeScreen("layouts")}
           />
         </div>
       </div>
@@ -401,6 +526,17 @@ export function ProfilePanel() {
           <span>Display name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} maxLength={24} />
         </label>
+        <label className="me__field">
+          <span>{t("profile_bio_label")}</span>
+          <textarea
+            className="me__textarea"
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            maxLength={160}
+            rows={3}
+            placeholder={t("profile_bio_placeholder")}
+          />
+        </label>
         <AvatarPicker value={avatar} onChange={setAvatar} layout="comfortable" />
         <button type="button" className="btn btn--primary me__save" onClick={saveProfile}>
           Save profile
@@ -416,7 +552,7 @@ export function ProfilePanel() {
       <div className="me-settings-card me-settings-card--toggles">
         <ToggleRow
           title="In-app tips"
-          description="Short hints when exploring Build, Friends, and Stars."
+          description={t("settings_tips_sub")}
           checked={mePrefs.tipsInApp}
           onChange={(v) => patchPrefs({ tipsInApp: v })}
         />
@@ -436,21 +572,48 @@ export function ProfilePanel() {
     </>
   );
 
+  const layoutsScreen = (
+    <>
+      <MeScreenHeader title={t("settings_layouts_title")} onBack={() => setMeScreen("settings")} />
+      <p className="me-settings-lede">{t("settings_layouts_sub")}</p>
+      <div className="me-settings-card me-settings-card--toggles">
+        <ToggleRow
+          title={t("settings_dark_mode")}
+          description={t("settings_dark_mode_sub")}
+          checked={mePrefs.darkMode}
+          onChange={(v) => patchPrefs({ darkMode: v })}
+        />
+      </div>
+    </>
+  );
+
   const privacyScreen = (
     <>
-      <MeScreenHeader title="Privacy" onBack={() => setMeScreen("settings")} />
-      <div className="me__card me__card--flush">
-        <p className="me-settings-prose">
-          LockedIn keeps your schedule, follows, pulse, and profile in this browser. Nothing is uploaded to a LockedIn
-          server in this demo.
-        </p>
-        <p className="me-settings-prose">
-          Friends and “Stars” are sample data for layout and flows. Do not enter sensitive personal information you would
-          not store in normal site storage.
-        </p>
-        <p className="me-settings-prose me-settings-prose--muted">
-          You can clear everything anytime from Settings → Data on this device.
-        </p>
+      <MeScreenHeader title={t("privacy_title")} onBack={() => setMeScreen("settings")} />
+      <p className="me-settings-lede">{t("privacy_lede")}</p>
+      <div className="me-settings-card me-settings-card--toggles">
+        <ToggleRow
+          title={t("privacy_private_account")}
+          description={t("privacy_private_account_sub")}
+          checked={profile.isPrivate === true}
+          onChange={(v) =>
+            setProfile({
+              isPrivate: v,
+              accountPublic: !v,
+              publishTodayToDiscover: v ? false : profile.publishTodayToDiscover,
+            })
+          }
+        />
+        <ToggleRow
+          title={t("privacy_publish_discover")}
+          description={t("privacy_publish_discover_sub")}
+          checked={profile.publishTodayToDiscover === true}
+          disabled={profile.isPrivate === true}
+          onChange={(v) => setProfile({ publishTodayToDiscover: v })}
+        />
+      </div>
+      <div className="me__card me__card--flush" style={{ marginTop: 12 }}>
+        <p className="me-settings-prose me-settings-prose--muted">{t("privacy_footer")}</p>
       </div>
     </>
   );
@@ -496,7 +659,7 @@ export function ProfilePanel() {
             <strong>Friends</strong> — Follow demo people and compare rhythms (offline sample).
           </li>
           <li>
-            <strong>Stars</strong> — Borrow energy from public arcs (illustrative templates, not endorsements).
+            <strong>Discover</strong> — Browse schedules others have chosen to publish for today.
           </li>
           <li>
             <strong>You</strong> — Profile, weekly recap, pulse, and settings (gear icon).
@@ -526,6 +689,7 @@ export function ProfilePanel() {
   else if (meScreen === "edit-profile") body = editProfileScreen;
   else if (meScreen === "notifications") body = notificationsScreen;
   else if (meScreen === "privacy") body = privacyScreen;
+  else if (meScreen === "layouts") body = layoutsScreen;
   else if (meScreen === "data") body = dataScreen;
   else if (meScreen === "help") body = helpScreen;
   else if (meScreen === "about") body = aboutScreen;
@@ -580,20 +744,31 @@ export function ProfilePanel() {
                 <X size={22} strokeWidth={2} />
               </button>
             </div>
-            <p className="modal__lede">Sample followers for the offline demo (not real accounts).</p>
-            <ul className="modal-list">
-              {DEMO_FOLLOWERS.map((f) => (
-                <li key={f.id} className="modal-list__row">
-                  <span className="modal-list__mark" aria-hidden>
-                    {f.mark}
-                  </span>
-                  <div>
-                    <p className="modal-list__name">{f.name}</p>
-                    <p className="modal-list__handle">@{f.handle}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <p className="modal__lede">People who currently follow you.</p>
+            {followerIds.length === 0 ? (
+              <p className="friends__muted">No followers yet.</p>
+            ) : (
+              <ul className="modal-list">
+                {followerIds.map((id) => {
+                  const f = getFriend(id);
+                  const remote = followerMap[id];
+                  const mark = f?.mark ?? remote?.avatarEmoji ?? "○";
+                  const name = f?.displayName ?? remote?.displayName ?? t("friends_request_unknown");
+                  const handle = f?.handle ?? remote?.handle ?? id.slice(0, 10);
+                  return (
+                    <li key={id} className="modal-list__row">
+                      <span className="modal-list__mark" aria-hidden>
+                        {mark}
+                      </span>
+                      <div>
+                        <p className="modal-list__name">{name}</p>
+                        <p className="modal-list__handle">@{handle}</p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </div>
       ) : null}

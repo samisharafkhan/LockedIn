@@ -17,6 +17,10 @@ export type StoredState = {
     avatarEmoji: string;
     avatarImageDataUrl?: string | null;
     avatarAnimalId?: string | null;
+    isPrivate?: boolean;
+    accountPublic?: boolean;
+    publishTodayToDiscover?: boolean;
+    bio?: string;
   };
   /** @deprecated migrated into blocksByDay */
   blocks?: StoredBlock[];
@@ -44,4 +48,25 @@ export function loadState(): StoredState | null {
 
 export function saveState(state: StoredState) {
   localStorage.setItem(KEY, JSON.stringify(state));
+}
+
+/** Serialize a calendar block for Firestore (e.g. sharing). */
+export function timeBlockToStored(b: {
+  id: string;
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+  activityId: string;
+  outcome?: "done" | "not_done";
+}): StoredBlock {
+  return {
+    id: b.id,
+    startHour: b.startHour,
+    startMinute: b.startMinute,
+    endHour: b.endHour,
+    endMinute: b.endMinute,
+    activityId: b.activityId,
+    ...(b.outcome ? { outcome: b.outcome } : {}),
+  };
 }

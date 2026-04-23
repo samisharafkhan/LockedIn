@@ -44,7 +44,23 @@ export type AvatarFields = {
 export type Profile = AvatarFields & {
   handle: string;
   displayName: string;
+  /**
+   * Instagram-style private account: follow requests must be accepted before others see your schedule.
+   * Default false (public).
+   */
+  isPrivate?: boolean;
+  /**
+   * @deprecated Synced as `!isPrivate`. Prefer `isPrivate`.
+   */
+  accountPublic?: boolean;
+  /** When true and account is not private, today’s blocks may appear on Discover. */
+  publishTodayToDiscover?: boolean;
+  /** Short bio (e.g. Instagram-style), shown on your profile and in directory. */
+  bio?: string;
 };
+
+/** Permission for a shared calendar block collaboration. */
+export type BlockSharePermission = "view" | "comment" | "edit";
 
 export type PublicPerson = {
   id: string;
