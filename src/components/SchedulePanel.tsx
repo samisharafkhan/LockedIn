@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
-import { Plus } from "lucide-react";
-import { AvatarDisplay } from "./AvatarDisplay";
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Plus, Printer, Send, Sparkles } from "lucide-react";
 import { useSchedule } from "../context/ScheduleContext";
-import { ActivityIcon } from "./ActivityIcon";
 import { BlockShareSheet, IncomingShareSheet } from "./EventShareSheets";
 import { BlockSheet } from "./BlockSheet";
+import { AiDaySheet } from "./AiDaySheet";
+import { IconButton } from "./IconButton";
+import { PillButton } from "./PillButton";
+import { ScheduleTimeline } from "./ScheduleTimeline";
+import { SectionHeader } from "./SectionHeader";
+import { SoftCard } from "./SoftCard";
 import { subscribeIncomingShares } from "../lib/blockShares";
 import type { BlockOutcome, TimeBlock } from "../types";
 import {
@@ -12,22 +17,13 @@ import {
   blockStartMinutes,
   defaultNewBlockRange,
 } from "../lib/scheduleBlocks";
+import { layoutDayBlocks } from "../lib/calendarLayout";
+import { createSchedulePost } from "../lib/schedulePosts";
+import { timeBlockToStored } from "../lib/storage";
+import { getFirestoreDb } from "../lib/firebaseApp";
 import { formatHm, minutesSinceMidnight } from "../lib/time";
-
-const VIEW_START_MIN = 0;
-const VIEW_END_MIN = 24 * 60;
-
-function blockLayout(b: TimeBlock) {
-  const s = blockStartMinutes(b);
-  const e = blockEndMinutesExclusive(b);
-  const viewLen = VIEW_END_MIN - VIEW_START_MIN;
-  const clipS = Math.max(s, VIEW_START_MIN);
-  const clipE = Math.min(e, VIEW_END_MIN);
-  if (clipE <= clipS) return null;
-  const top = ((clipS - VIEW_START_MIN) / viewLen) * 100;
-  const height = ((clipE - clipS) / viewLen) * 100;
-  return { top, height };
-}
+import { loadMePrefs } from "../lib/mePrefs";
+import { createIncomingNotification } from "../lib/socialNotifications";
 
 function todayLabel() {
   return new Intl.DateTimeFormat(undefined, {
@@ -41,21 +37,23 @@ function needsCheckIn(b: TimeBlock, nowMin: number) {
   return nowMin >= blockEndMinutesExclusive(b) && !b.outcome;
 }
 
-function isActive(b: TimeBlock, nowMin: number) {
-  return nowMin >= blockStartMinutes(b) && nowMin < blockEndMinutesExclusive(b);
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value));
 }
 
-function progress01(b: TimeBlock, nowMin: number) {
-  const s = blockStartMinutes(b);
-  const e = blockEndMinutesExclusive(b);
-  if (e <= s) return 0;
-  return Math.min(1, Math.max(0, (nowMin - s) / (e - s)));
+function activityTone(activityId: TimeBlock["activityId"]): "sage" | "blue" | "purple" | "butter" | "beige" {
+  if (activityId === "work" || activityId === "focus" || activityId === "class") return "beige";
+  if (activityId === "social" || activityId === "chill") return "purple";
+  if (activityId === "gym" || activityId === "commute") return "blue";
+  if (activityId === "travel") return "butter";
+  return "sage";
 }
 
 export function SchedulePanel() {
   const {
     blocks,
     profile,
+    scheduleByDay,
     addBlock,
     updateBlock,
     removeBlock,
@@ -64,7 +62,10 @@ export function SchedulePanel() {
     t,
     firebaseUser,
     todayKey,
+    mergeBlockIntoDay,
   } = useSchedule();
+  const [postBusy, setPostBusy] = useState(false);
+  const [postHint, setPostHint] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetMode, setSheetMode] = useState<
     | { kind: "add"; defaults: Omit<TimeBlock, "id"> }
@@ -75,8 +76,11 @@ export function SchedulePanel() {
   const [shareBlock, setShareBlock] = useState<TimeBlock | null>(null);
   const [incomingShareIds, setIncomingShareIds] = useState<string[]>([]);
   const [openIncomingShareId, setOpenIncomingShareId] = useState<string | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const remindedRef = useRef(new Set<string>());
 
   const nowMin = useMemo(() => minutesSinceMidnight(new Date()), [tick, blocks]);
+  const dayLayouts = useMemo(() => layoutDayBlocks(blocks), [blocks]);
 
   useEffect(() => {
     if (!firebaseUser) {
@@ -88,11 +92,73 @@ export function SchedulePanel() {
 
   const pending = useMemo(() => blocks.filter((b) => needsCheckIn(b, nowMin)), [blocks, nowMin]);
 
-  const hours = useMemo(() => {
-    const list: number[] = [];
-    for (let h = 0; h <= 23; h += 1) list.push(h);
-    return list;
-  }, []);
+  useEffect(() => {
+    const prefs = loadMePrefs();
+    if (!prefs.blockReminders) return;
+    const upcoming = blocks
+      .map((b) => ({ b, startsIn: blockStartMinutes(b) - nowMin }))
+      .filter((x) => x.startsIn > 0 && x.startsIn <= 10)
+      .sort((a, b) => a.startsIn - b.startsIn)[0];
+    if (!upcoming) return;
+    const reminderKey = `${todayKey}:${upcoming.b.id}`;
+    if (remindedRef.current.has(reminderKey)) return;
+    remindedRef.current.add(reminderKey);
+    if (typeof Notification !== "undefined") {
+      if (Notification.permission === "granted") {
+        new Notification(t("schedule_reminder_title"), {
+          body: t("schedule_reminder_body", {
+            act: t(`act_${upcoming.b.activityId}_label`),
+            min: String(upcoming.startsIn),
+          }),
+        });
+      } else if (Notification.permission !== "denied") {
+        void Notification.requestPermission();
+      }
+    }
+    const db = getFirestoreDb();
+    if (db && firebaseUser) {
+      void createIncomingNotification(db, {
+        toUid: firebaseUser.uid,
+        actorUid: firebaseUser.uid,
+        type: "block_reminder",
+        message: t("schedule_reminder_body", {
+          act: t(`act_${upcoming.b.activityId}_label`),
+          min: String(upcoming.startsIn),
+        }),
+      }).catch(() => {});
+    }
+  }, [blocks, nowMin, t, todayKey, firebaseUser]);
+
+  const timelineBlocks = useMemo(() => {
+    const startMin = 8 * 60;
+    const endMin = 22 * 60;
+    const range = endMin - startMin;
+    return blocks
+      .map((b) => {
+        const layout = dayLayouts.get(b.id);
+        const from = blockStartMinutes(b);
+        const to = blockEndMinutesExclusive(b);
+        const clippedStart = Math.max(startMin, Math.min(from, endMin));
+        const clippedEnd = Math.max(startMin, Math.min(to, endMin));
+        const normalizedStart = clamp01((clippedStart - startMin) / range) * 100;
+        const normalizedHeight = clamp01((clippedEnd - clippedStart) / range) * 100;
+        return {
+          id: b.id,
+          activityId: b.activityId,
+          label: t(`act_${b.activityId}_label`),
+          timeLabel: `${formatHm(b.startHour, b.startMinute)} - ${
+            b.endHour === 24 && b.endMinute === 0 ? t("schedule_midnight") : formatHm(b.endHour, b.endMinute)
+          }`,
+          topPct: normalizedStart,
+          heightPct: normalizedHeight,
+          leftPct: layout?.leftPct ?? 0,
+          widthPct: layout?.widthPct ?? 100,
+          tone: activityTone(b.activityId),
+          rightTag: b.outcome === "done" ? "Done" : b.outcome === "not_done" ? "Missed" : undefined,
+        };
+      })
+      .filter((b) => b.heightPct > 0);
+  }, [blocks, t, dayLayouts]);
 
   const openAdd = () => {
     const d = defaultNewBlockRange(blocks);
@@ -119,7 +185,13 @@ export function SchedulePanel() {
     setShareOpen(true);
   };
 
-  const onSave = (payload: Omit<TimeBlock, "id"> & { id?: string }) => {
+  const onSave = (
+    payload: Omit<TimeBlock, "id"> & {
+      id?: string;
+      repeatMode?: "none" | "daily" | "weekdays" | "weekends";
+      repeatWeeks?: number;
+    },
+  ) => {
     if (payload.id) {
       updateBlock(payload.id, {
         startHour: payload.startHour,
@@ -136,6 +208,32 @@ export function SchedulePanel() {
         endMinute: payload.endMinute,
         activityId: payload.activityId,
       });
+      const repeatMode = payload.repeatMode ?? "none";
+      const repeatWeeks = Math.max(1, Math.min(12, payload.repeatWeeks ?? 1));
+      if (repeatMode !== "none") {
+        const base = new Date(`${todayKey}T12:00:00`);
+        const dayCount = repeatWeeks * 7;
+        for (let i = 1; i < dayCount; i += 1) {
+          const d = new Date(base);
+          d.setDate(base.getDate() + i);
+          const weekday = d.getDay();
+          const isWeekday = weekday >= 1 && weekday <= 5;
+          const ok =
+            repeatMode === "daily" ||
+            (repeatMode === "weekdays" && isWeekday) ||
+            (repeatMode === "weekends" && !isWeekday);
+          if (!ok) continue;
+          const key = d.toISOString().slice(0, 10);
+          mergeBlockIntoDay(key, {
+            id: `r-${Date.now().toString(36)}-${i}-${Math.random().toString(36).slice(2, 7)}`,
+            startHour: payload.startHour,
+            startMinute: payload.startMinute,
+            endHour: payload.endHour,
+            endMinute: payload.endMinute,
+            activityId: payload.activityId,
+          });
+        }
+      }
     }
   };
 
@@ -143,20 +241,71 @@ export function SchedulePanel() {
     setBlockOutcome(id, outcome);
   };
 
+  const printCalendar = () => {
+    window.setTimeout(() => window.print(), 100);
+  };
+
+  const postTodayToProfile = async () => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser) {
+      setPostHint(t("build_post_need_signin"));
+      return;
+    }
+    const list = scheduleByDay[todayKey] ?? [];
+    if (list.length === 0) {
+      setPostHint(t("build_post_empty"));
+      return;
+    }
+    setPostBusy(true);
+    setPostHint(null);
+    try {
+      await createSchedulePost(db, {
+        ownerUid: firebaseUser.uid,
+        dayKey: todayKey,
+        blocks: list.map(timeBlockToStored),
+        displayName: (profile.displayName ?? "").toString().trim() || "User",
+        handle: (profile.handle ?? "").toString().trim() || "user",
+        avatarEmoji: profile.avatarEmoji ?? "○",
+        avatarImageDataUrl: profile.avatarImageDataUrl ?? null,
+        avatarAnimalId: profile.avatarAnimalId ?? null,
+      });
+      setPostHint(t("build_post_done"));
+    } catch (e) {
+      console.error("[LockedIn] createSchedulePost:", e);
+      const code = typeof e === "object" && e && "code" in e ? String((e as { code: string }).code) : "";
+      if (code === "permission-denied") {
+        setPostHint(t("build_post_err_permission"));
+      } else {
+        setPostHint(t("err_generic"));
+      }
+    } finally {
+      setPostBusy(false);
+    }
+  };
+
   return (
-    <section className="schedule" aria-labelledby="sched-heading">
-      <div className="schedule__intro">
-        <div>
-          <p className="eyebrow eyebrow--dark">{t("schedule_eyebrow")}</p>
-          <h2 id="sched-heading" className="schedule__title">
-            {todayLabel()}
-          </h2>
-          <p className="schedule__sub">{t("schedule_intro")}</p>
+    <section className="schedule-panel" aria-labelledby="sched-heading">
+      <SoftCard className="schedule-panel__card">
+        <SectionHeader
+          id="sched-heading"
+          eyebrow="BUILD"
+          title={todayLabel()}
+          subtitle="Stack your day with blocks."
+        />
+        <div className="schedule-panel__actions">
+          {firebaseUser ? (
+            <PillButton variant="secondary" disabled={postBusy} onClick={() => void postTodayToProfile()}>
+              <Send size={15} strokeWidth={2} aria-hidden />
+              {postBusy ? t("build_posting") : "Post day"}
+            </PillButton>
+          ) : null}
+          <PillButton variant="secondary" onClick={printCalendar}>
+            <Printer size={15} strokeWidth={2} aria-hidden />
+            Save PDF
+          </PillButton>
         </div>
-        <button type="button" className="avatar-ring" aria-label={t("nav_profile")}>
-          <AvatarDisplay source={profile} size="md" />
-        </button>
-      </div>
+        {postHint ? <p className="schedule-panel__hint">{postHint}</p> : null}
+      </SoftCard>
 
       {incomingShareIds.length > 0 && firebaseUser ? (
         <div className="share-inbox" role="region" aria-label={t("share_inbox_label")}>
@@ -176,7 +325,6 @@ export function SchedulePanel() {
       {pending.length ? (
         <div className="checkin-banner" role="region" aria-label={t("schedule_checkin_title")}>
           <p className="checkin-banner__title">{t("schedule_checkin_title")}</p>
-          <p className="checkin-banner__sub">{t("schedule_checkin_sub")}</p>
           <ul className="checkin-list">
             {pending.map((b) => {
               return (
@@ -209,71 +357,32 @@ export function SchedulePanel() {
         </div>
       ) : null}
 
-      <div className="cal">
-        <div className="cal__grid" aria-hidden>
-          {hours.map((h) => (
-            <div key={h} className="cal__hour-row">
-              <span className="cal__hour-label">
-                {new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(
-                  new Date(2000, 0, 1, h, 0),
-                )}
-              </span>
-              <span className="cal__hour-line" />
-            </div>
-          ))}
-        </div>
+      <ScheduleTimeline
+        blocks={timelineBlocks}
+        onOpenBlock={(id) => {
+          const target = blocks.find((b) => b.id === id);
+          if (target) openEdit(target);
+        }}
+        emptyTitle="Nothing here yet"
+        emptyDescription="Tap + to add your first block."
+      />
 
-        <div className="cal__blocks">
-          <span className="cal__now-line" style={{ top: `${(nowMin / (24 * 60)) * 100}%` }} aria-hidden />
-          {blocks.length === 0 ? (
-            <div className="cal__empty">
-              <p className="cal__empty-title">{t("schedule_empty_title")}</p>
-              <p className="cal__empty-text">{t("schedule_empty_text")}</p>
-            </div>
-          ) : null}
-          {blocks.map((b) => {
-            const layout = blockLayout(b);
-            if (!layout) return null;
-            const active = isActive(b, nowMin);
-            const past = nowMin >= blockEndMinutesExclusive(b);
-            const pct = active ? progress01(b, nowMin) * 100 : past ? 100 : 0;
-            const pendingFlag = needsCheckIn(b, nowMin);
-            return (
-              <button
-                key={b.id}
-                type="button"
-                className={`cal__block ${active ? "cal__block--active" : ""} ${past ? "cal__block--past" : ""} ${pendingFlag ? "cal__block--pending" : ""}`}
-                style={{ top: `${layout.top}%`, height: `${Math.max(layout.height, 3)}%` }}
-                onClick={() => openEdit(b)}
-              >
-                {active ? <div className="cal__block-progress" style={{ height: `${pct}%` }} /> : null}
-                <span className="cal__block-icon" aria-hidden>
-                  <ActivityIcon id={b.activityId} size={18} />
-                </span>
-                <span className="cal__block-text">
-                  <span className="cal__block-name">{t(`act_${b.activityId}_label`)}</span>
-                  <span className="cal__block-time">
-                    {formatHm(b.startHour, b.startMinute)} –{" "}
-                    {b.endHour === 24 && b.endMinute === 0
-                      ? t("schedule_midnight")
-                      : formatHm(b.endHour, b.endMinute)}
-                  </span>
-                  {b.outcome === "done" ? (
-                    <span className="cal__badge cal__badge--done">{t("schedule_badge_done")}</span>
-                  ) : null}
-                  {b.outcome === "not_done" ? (
-                    <span className="cal__badge cal__badge--miss">{t("schedule_badge_missed")}</span>
-                  ) : null}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+      <div className="fab-group" aria-label={t("build_fab_group_a11y")}>
+        <IconButton
+          icon={<Sparkles size={18} strokeWidth={2.1} />}
+          className="fab fab--secondary fab--secondary-subtle"
+          onClick={() => setAiOpen(true)}
+          aria-label={t("build_ai_a11y")}
+        />
+        <IconButton
+          icon={<Plus size={22} strokeWidth={2.25} />}
+          className="fab fab--primary"
+          onClick={openAdd}
+          aria-label={t("schedule_add_block_a11y")}
+        />
       </div>
 
-      <button type="button" className="fab" onClick={openAdd} aria-label={t("schedule_add_block_a11y")}>
-        <Plus size={26} strokeWidth={2.25} />
-      </button>
+      <AiDaySheet open={aiOpen} onClose={() => setAiOpen(false)} />
 
       <BlockSheet
         open={sheetOpen}
@@ -286,6 +395,7 @@ export function SchedulePanel() {
         onSave={onSave}
         onDelete={removeBlock}
         onShare={firebaseUser ? openShareFromSheet : undefined}
+        eventDayKey={todayKey}
       />
 
       <BlockShareSheet
@@ -304,6 +414,41 @@ export function SchedulePanel() {
           onClose={() => setOpenIncomingShareId(null)}
         />
       ) : null}
+
+      {createPortal(
+        <div id="schedule-print-root" aria-hidden>
+          <h1 className="schedule-print__title">LockedIn · {todayLabel()}</h1>
+          <p className="schedule-print__sub">
+            {todayKey} — {t("schedule_print_disclaimer")}
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>{t("schedule_print_col_time")}</th>
+                <th>{t("schedule_print_col_activity")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {blocks.length === 0 ? (
+                <tr>
+                  <td colSpan={2}>{t("schedule_empty_title")}</td>
+                </tr>
+              ) : (
+                blocks.map((b) => (
+                  <tr key={b.id}>
+                    <td>
+                      {formatHm(b.startHour, b.startMinute)} –{" "}
+                      {b.endHour === 24 && b.endMinute === 0 ? t("schedule_midnight") : formatHm(b.endHour, b.endMinute)}
+                    </td>
+                    <td>{t(`act_${b.activityId}_label`)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>,
+        document.body,
+      )}
     </section>
   );
 }

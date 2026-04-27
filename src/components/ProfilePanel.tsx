@@ -21,24 +21,38 @@ import { useSchedule } from "../context/ScheduleContext";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { AvatarPicker } from "./AvatarPicker";
 import { PhotoLightbox } from "./PhotoLightbox";
-import { PulsePanel } from "./PulsePanel";
 import { ActivityIcon } from "./ActivityIcon";
 import { hoursByActivityLastNDays, hoursForActivityOnDay } from "../lib/weekStats";
 import { lastNDayKeys, weekdayShort } from "../lib/dates";
 import { applyThemeFromPrefs, loadMePrefs, ME_PREFS_KEY, saveMePrefs, type MePrefs } from "../lib/mePrefs";
 import { APP_VERSION } from "../version";
+import { formatHm } from "../lib/time";
 import { getFirestoreDb } from "../lib/firebaseApp";
 import { fetchDirectoryUser, type DirectoryUser } from "../lib/userDirectory";
+import { subscribeUserSchedulePosts, deleteSchedulePost, type SchedulePostDoc } from "../lib/schedulePosts";
+import { UserPublicProfileSheet } from "./UserPublicProfileSheet";
+import { WeeklyStatsCard } from "./WeeklyStatsCard";
+import { SchedulePostHCard } from "./SchedulePostHCard";
+import { PostSocialBar } from "./PostSocialBar";
+import { storedToTimeBlock } from "./ProfilePostUtils";
+import {
+  markNotificationRead,
+  subscribeMyActivity,
+  subscribeMyNotifications,
+  type SocialNotificationDoc,
+  type UserActivityDoc,
+} from "../lib/socialNotifications";
 import type { ActivityId, AvatarFields } from "../types";
 import type { LucideIcon } from "lucide-react";
 
-type StatSheet = "following" | "followers" | "pulse" | null;
+type StatSheet = "following" | "followers" | null;
 
 type MeScreen =
   | "profile"
   | "settings"
   | "edit-profile"
   | "notifications"
+  | "activity"
   | "privacy"
   | "layouts"
   | "data"
@@ -124,8 +138,6 @@ export function ProfilePanel() {
     scheduleByDay,
     followingIds,
     followerIds,
-    pulse,
-    clearPulse,
     getFriend,
     firebaseUser,
     signOutAuth,
@@ -150,6 +162,17 @@ export function ProfilePanel() {
   const [mePrefs, setMePrefs] = useState<MePrefs>(() => loadMePrefs());
   const [requesterMap, setRequesterMap] = useState<Record<string, DirectoryUser>>({});
   const [followerMap, setFollowerMap] = useState<Record<string, DirectoryUser>>({});
+  const [followingMap, setFollowingMap] = useState<Record<string, DirectoryUser>>({});
+  const [publicProfileUid, setPublicProfileUid] = useState<string | null>(null);
+  const [myPostRows, setMyPostRows] = useState<{ id: string; data: SchedulePostDoc }[]>([]);
+  const [openMyPostId, setOpenMyPostId] = useState<string | null>(null);
+  const [myNotifications, setMyNotifications] = useState<{ id: string; data: SocialNotificationDoc }[]>([]);
+  const [notificationActors, setNotificationActors] = useState<Record<string, DirectoryUser>>({});
+  const [myActivityRows, setMyActivityRows] = useState<{ id: string; data: UserActivityDoc }[]>([]);
+  const openMyPostEntry = useMemo(
+    () => (openMyPostId ? myPostRows.find((r) => r.id === openMyPostId) : undefined),
+    [myPostRows, openMyPostId],
+  );
 
   useEffect(() => {
     setName(profile.displayName);
@@ -215,6 +238,75 @@ export function ProfilePanel() {
     };
   }, [followerIds, firebaseUser, getFriend]);
 
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser || followingIds.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, DirectoryUser> = {};
+      for (const uid of followingIds) {
+        if (getFriend(uid) || next[uid]) continue;
+        const u = await fetchDirectoryUser(db, uid);
+        if (u) next[uid] = u;
+      }
+      if (!cancelled) {
+        setFollowingMap((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [followingIds, firebaseUser, getFriend]);
+
+  useEffect(() => {
+    if (!firebaseUser) {
+      setMyPostRows([]);
+      return;
+    }
+    return subscribeUserSchedulePosts(firebaseUser.uid, setMyPostRows);
+  }, [firebaseUser]);
+
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser || myNotifications.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const actorUids = [...new Set(myNotifications.map((n) => n.data.actorUid).filter(Boolean))];
+      const next: Record<string, DirectoryUser> = {};
+      for (const uid of actorUids) {
+        if (notificationActors[uid]) continue;
+        const row = await fetchDirectoryUser(db, uid);
+        if (row) next[uid] = row;
+      }
+      if (!cancelled && Object.keys(next).length > 0) {
+        setNotificationActors((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [myNotifications, firebaseUser, notificationActors]);
+
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser) {
+      setMyNotifications([]);
+      return;
+    }
+    return subscribeMyNotifications(db, firebaseUser.uid, setMyNotifications);
+  }, [firebaseUser]);
+
+  useEffect(() => {
+    const db = getFirestoreDb();
+    if (!db || !firebaseUser) {
+      setMyActivityRows([]);
+      return;
+    }
+    return subscribeMyActivity(db, firebaseUser.uid, setMyActivityRows);
+  }, [firebaseUser]);
+
   const patchPrefs = (patch: Partial<MePrefs>) => {
     setMePrefs((prev) => {
       const next = { ...prev, ...patch };
@@ -236,20 +328,6 @@ export function ProfilePanel() {
       }
     }
     return items.sort((a, b) => b.hours - a.hours);
-  }, [totals]);
-
-  const maxTotalHours = useMemo(() => {
-    let m = 0;
-    for (const h of totals.values()) m = Math.max(m, h);
-    return m || 1;
-  }, [totals]);
-
-  const pulseDist = useMemo(() => {
-    const rows: { id: ActivityId; h: number }[] = [];
-    for (const [id, h] of totals.entries()) {
-      if (h >= 0.05) rows.push({ id, h });
-    }
-    return rows.sort((a, b) => b.h - a.h);
   }, [totals]);
 
   const maxDayHours = useMemo(() => {
@@ -275,6 +353,11 @@ export function ProfilePanel() {
     setStatSheet(null);
   };
 
+  const openUserProfile = (uid: string) => {
+    closeSheets();
+    setPublicProfileUid(uid);
+  };
+
   const saveProfile = () => {
     const trimmed = name.trim() || profile.displayName;
     const handle = trimmed.toLowerCase().replace(/\s+/g, "") || profile.handle;
@@ -290,8 +373,7 @@ export function ProfilePanel() {
 
   const profileMain = (
     <>
-      <div className="profile__topbar">
-        <p className="profile__topbar-label">You</p>
+      <div className="profile__topbar profile__topbar--end">
         <button
           type="button"
           className="icon-btn profile__settings-gear"
@@ -376,10 +458,10 @@ export function ProfilePanel() {
               <p className="profile__stat-num">{followerIds.length}</p>
               <p className="profile__stat-label">Followers</p>
             </button>
-            <button type="button" className="profile__stat-btn" onClick={() => openStat("pulse")}>
-              <p className="profile__stat-num">{pulse ? "1" : "0"}</p>
-              <p className="profile__stat-label">Pulse</p>
-            </button>
+            <div className="profile__stat-btn profile__stat-btn--plain" aria-hidden>
+              <p className="profile__stat-num">{myPostRows.length}</p>
+              <p className="profile__stat-label">Posts</p>
+            </div>
           </div>
           {(profile.bio ?? "").trim() ? (
             <p className="profile__bio profile__bio--filled">{(profile.bio ?? "").trim()}</p>
@@ -389,37 +471,46 @@ export function ProfilePanel() {
         </div>
       </div>
 
-      <div className="profile__section">
-        <h3 className="profile__h3">This week</h3>
-        <div className="metric-feed">
-          {feedItems.length === 0 ? (
-            <p className="friends__muted">
-              Add a few days of blocks to see “studied X hours this week” style cards here.
-            </p>
-          ) : (
-            feedItems.map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                className="metric-card"
-                onClick={() => openMetric(it.id)}
-              >
-                <p className="metric-card__eyebrow">Last 7 days</p>
-                <p className="metric-card__title">
-                  <strong>{profile.displayName}</strong> logged{" "}
-                  <strong>{it.hours.toFixed(1)}h</strong> on {it.label.toLowerCase()}
-                </p>
-                <p className="metric-card__hint">Tap for day-by-day distribution</p>
-              </button>
-            ))
-          )}
-        </div>
-      </div>
+      <WeeklyStatsCard
+        stats={feedItems}
+        displayName={profile.displayName}
+        onSelectStat={openMetric}
+      />
 
-      <div className="profile__section profile__section--tight">
-        <h3 className="profile__h3">Now</h3>
-        <PulsePanel embedded />
-      </div>
+      {firebaseUser && myActivityRows.length > 0 ? (
+        <div className="profile__section">
+          <h3 className="profile-recent__h">Recent activity</h3>
+          <ul className="profile-recent__list" role="list">
+            {myActivityRows.slice(0, 3).map(({ id, data }) => (
+              <li key={id} className="profile-recent__row">
+                <span className="profile-recent__mark" aria-hidden>
+                  {data.type === "liked" ? "♥" : data.type === "saved" ? "★" : "✎"}
+                </span>
+                <p className="profile-recent__text">
+                  {data.type === "liked" ? "Liked" : data.type === "saved" ? "Saved" : "Commented"}{" "}
+                  {data.message ? <span>“{data.message}”</span> : "a post"}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <button type="button" className="btn btn--sm btn--outline" onClick={() => setMeScreen("activity")}>
+            See all activity
+          </button>
+        </div>
+      ) : null}
+
+      {firebaseUser && myPostRows.length > 0 ? (
+        <div className="profile__section profile__section--posts">
+          <h3 className="profile__h3">{t("profile_section_posts")}</h3>
+          <ul className="post-hcard-list" role="list">
+            {myPostRows.map(({ id, data }) => (
+              <li key={id} className="post-hcard-list__item" role="listitem">
+                <SchedulePostHCard data={data} onOpen={() => setOpenMyPostId(id)} variant="profile" />
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </>
   );
 
@@ -472,8 +563,14 @@ export function ProfilePanel() {
           <SettingsNavRow
             Icon={Bell}
             title="Notifications"
-            subtitle="Tips and reminders (on this device)"
+            subtitle="Follows, likes, comments, reminders"
             onClick={() => setMeScreen("notifications")}
+          />
+          <SettingsNavRow
+            Icon={Database}
+            title="Your activity"
+            subtitle="Likes, saves, comments you've made"
+            onClick={() => setMeScreen("activity")}
           />
           <SettingsNavRow
             Icon={Shield}
@@ -548,7 +645,49 @@ export function ProfilePanel() {
   const notificationsScreen = (
     <>
       <MeScreenHeader title="Notifications" onBack={() => setMeScreen("settings")} />
-      <p className="me-settings-lede">These options are saved in your browser only. They do not connect to a server.</p>
+      <p className="me-settings-lede">Recent activity on your account. Tap any item to mark it as seen.</p>
+      <ul className="modal-list">
+        {myNotifications.length === 0 ? (
+          <li className="friends__muted">No notifications yet.</li>
+        ) : (
+          myNotifications
+            .map(({ id, data }) => (
+            <li key={id}>
+              <button
+                type="button"
+                className="modal-list__row modal-list__row--button"
+                onClick={() => {
+                  const db = getFirestoreDb();
+                  if (!db || !firebaseUser) return;
+                  void markNotificationRead(db, firebaseUser.uid, id);
+                }}
+              >
+                <span className="modal-list__mark">{data.read ? "○" : "●"}</span>
+                <div>
+                  <p className="modal-list__name">
+                    {(() => {
+                      const actor = notificationActors[data.actorUid]?.displayName ?? `@${data.actorUid.slice(0, 8)}`;
+                      if (data.type === "follow_request") return `${actor} requested to follow you`;
+                      if (data.type === "follow_accept") return `${actor} accepted your follow request`;
+                      if (data.type === "post_like") return `${actor} liked your post`;
+                      if (data.type === "post_save") return `${actor} saved your post`;
+                      if (data.type === "post_comment") return `${actor} commented on your post`;
+                      if (data.type === "share_sent") return "Share sent";
+                      return "Upcoming event reminder";
+                    })()}
+                  </p>
+                  <p className="modal-list__handle">{data.message ?? "Open to mark as read."}</p>
+                </div>
+              </button>
+            </li>
+            ))
+        )}
+      </ul>
+      <div className="me-settings-card me-settings-card--toggles" style={{ marginTop: 12 }}>
+        <p className="me-settings-prose me-settings-prose--muted" style={{ margin: 0 }}>
+          Preference toggles below are saved on this device.
+        </p>
+      </div>
       <div className="me-settings-card me-settings-card--toggles">
         <ToggleRow
           title="In-app tips"
@@ -569,6 +708,34 @@ export function ProfilePanel() {
           onChange={(v) => patchPrefs({ activityStatus: v })}
         />
       </div>
+    </>
+  );
+
+  const activityScreen = (
+    <>
+      <MeScreenHeader title="Your activity" onBack={() => setMeScreen("settings")} />
+      <p className="me-settings-lede">Likes, saves, and comments you've made on others' posts.</p>
+      <ul className="modal-list">
+        {myActivityRows.length === 0 ? (
+          <li className="friends__muted">No activity yet.</li>
+        ) : (
+          myActivityRows.map(({ id, data }) => (
+            <li key={id} className="modal-list__row">
+              <span className="modal-list__mark" aria-hidden>
+                {data.type === "liked" ? "♥" : data.type === "saved" ? "★" : "✎"}
+              </span>
+              <div>
+                <p className="modal-list__name">
+                  {data.type === "liked" ? "Liked a post" : data.type === "saved" ? "Saved a post" : "Commented"}
+                </p>
+                <p className="modal-list__handle">
+                  {data.message ? `“${data.message}”` : `on @${(data.targetOwnerUid ?? "").slice(0, 8)}…`}
+                </p>
+              </div>
+            </li>
+          ))
+        )}
+      </ul>
     </>
   );
 
@@ -631,7 +798,7 @@ export function ProfilePanel() {
           </button>
         ) : (
           <div className="me__confirm">
-            <p className="me__warn">This clears your schedule, follows, pulse, profile, and settings preferences.</p>
+            <p className="me__warn">This clears your schedule, follows, profile, notifications, and settings preferences.</p>
             <div className="me__confirm-row">
               <button type="button" className="btn btn--ghost" onClick={() => setShowReset(false)}>
                 Cancel
@@ -662,7 +829,7 @@ export function ProfilePanel() {
             <strong>Discover</strong> — Browse schedules others have chosen to publish for today.
           </li>
           <li>
-            <strong>You</strong> — Profile, weekly recap, pulse, and settings (gear icon).
+            <strong>You</strong> — Profile, weekly recap, posts, and settings (gear icon).
           </li>
         </ul>
       </div>
@@ -688,6 +855,7 @@ export function ProfilePanel() {
   else if (meScreen === "settings") body = settingsHome;
   else if (meScreen === "edit-profile") body = editProfileScreen;
   else if (meScreen === "notifications") body = notificationsScreen;
+  else if (meScreen === "activity") body = activityScreen;
   else if (meScreen === "privacy") body = privacyScreen;
   else if (meScreen === "layouts") body = layoutsScreen;
   else if (meScreen === "data") body = dataScreen;
@@ -715,16 +883,25 @@ export function ProfilePanel() {
               <ul className="modal-list">
                 {followingIds.map((id) => {
                   const f = getFriend(id);
-                  if (!f) return null;
+                  const remote = followingMap[id];
+                  const mark = f?.mark ?? remote?.avatarEmoji ?? "○";
+                  const name = f?.displayName ?? remote?.displayName ?? t("friends_compare_loading");
+                  const handle = f?.handle ?? remote?.handle ?? id.slice(0, 10);
                   return (
-                    <li key={id} className="modal-list__row">
-                      <span className="modal-list__mark" aria-hidden>
-                        {f.mark}
-                      </span>
-                      <div>
-                        <p className="modal-list__name">{f.displayName}</p>
-                        <p className="modal-list__handle">@{f.handle}</p>
-                      </div>
+                    <li key={id}>
+                      <button
+                        type="button"
+                        className="modal-list__row modal-list__row--button glass-hit"
+                        onClick={() => openUserProfile(id)}
+                      >
+                        <span className="modal-list__mark" aria-hidden>
+                          {mark}
+                        </span>
+                        <div>
+                          <p className="modal-list__name">{name}</p>
+                          <p className="modal-list__handle">@{handle}</p>
+                        </div>
+                      </button>
                     </li>
                   );
                 })}
@@ -756,14 +933,20 @@ export function ProfilePanel() {
                   const name = f?.displayName ?? remote?.displayName ?? t("friends_request_unknown");
                   const handle = f?.handle ?? remote?.handle ?? id.slice(0, 10);
                   return (
-                    <li key={id} className="modal-list__row">
-                      <span className="modal-list__mark" aria-hidden>
-                        {mark}
-                      </span>
-                      <div>
-                        <p className="modal-list__name">{name}</p>
-                        <p className="modal-list__handle">@{handle}</p>
-                      </div>
+                    <li key={id}>
+                      <button
+                        type="button"
+                        className="modal-list__row modal-list__row--button glass-hit"
+                        onClick={() => openUserProfile(id)}
+                      >
+                        <span className="modal-list__mark" aria-hidden>
+                          {mark}
+                        </span>
+                        <div>
+                          <p className="modal-list__name">{name}</p>
+                          <p className="modal-list__handle">@{handle}</p>
+                        </div>
+                      </button>
                     </li>
                   );
                 })}
@@ -773,69 +956,68 @@ export function ProfilePanel() {
         </div>
       ) : null}
 
-      {statSheet === "pulse" ? (
-        <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pulse-sheet-title">
-          <button type="button" className="modal__backdrop" aria-label="Close" onClick={closeSheets} />
-          <div className="modal__panel">
+      <UserPublicProfileSheet
+        open={publicProfileUid != null}
+        targetUid={publicProfileUid}
+        onClose={() => setPublicProfileUid(null)}
+      />
+
+      {openMyPostEntry && firebaseUser ? (
+        <div className="modal" role="dialog" aria-modal="true" aria-labelledby="my-post-title">
+          <button type="button" className="modal__backdrop" aria-label="Close" onClick={() => setOpenMyPostId(null)} />
+          <div className="modal__panel glass-panel">
             <div className="modal__top">
-              <h3 id="pulse-sheet-title">Pulse & time mix</h3>
-              <button type="button" className="icon-btn" onClick={closeSheets} aria-label="Close">
+              <h3 id="my-post-title">{t("profile_post_day", { day: openMyPostEntry.data.dayKey })}</h3>
+              <button
+                type="button"
+                className="icon-btn glass-hit"
+                onClick={() => setOpenMyPostId(null)}
+                aria-label="Close"
+              >
                 <X size={22} strokeWidth={2} />
               </button>
             </div>
-            {pulse ? (
-              <div className="pulse-sheet-active">
-                <p className="modal__lede">Your active pulse</p>
-                <div className="modal-list__row">
-                  <span className="modal-list__mark" aria-hidden>
-                    <ActivityIcon id={pulse.activityId} size={20} />
-                  </span>
-                  <div>
-                    <p className="modal-list__name">{activityById(pulse.activityId).label}</p>
-                    <p className="modal-list__handle">
-                      {new Intl.DateTimeFormat(undefined, {
-                        weekday: "short",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      }).format(new Date(pulse.at))}
-                    </p>
-                  </div>
-                </div>
-                <button type="button" className="btn btn--outline" style={{ marginTop: 10 }} onClick={clearPulse}>
-                  Clear pulse
-                </button>
-              </div>
-            ) : (
-              <p className="modal__lede">No active pulse. Set one from the Now section below.</p>
-            )}
-            <p className="modal__foot" style={{ marginTop: 16 }}>
-              <strong>Weekly time mix</strong> (from saved blocks, last 7 days)
-            </p>
-            {pulseDist.length === 0 ? (
-              <p className="friends__muted">Add blocks in Build to see a distribution.</p>
-            ) : (
-              <div className="dist-bars">
-                {pulseDist.map(({ id, h }) => (
-                  <div key={id} className="dist-bar">
-                    <div className="dist-bar__label">
-                      <ActivityIcon id={id} size={16} />
-                      {activityById(id).label}
-                    </div>
+            {firebaseUser ? (
+              <PostSocialBar
+                variant="schedulePost"
+                postId={openMyPostEntry.id}
+                ownerUid={openMyPostEntry.data.ownerUid}
+                showPinControl
+                postPinned={openMyPostEntry.data.pinned === true}
+              />
+            ) : null}
+            <ol className="discover__blocks">
+              {openMyPostEntry.data.blocks.map((sb) => {
+                const b = storedToTimeBlock(sb);
+                return (
+                  <li key={b.id} className="discover__block-row">
+                    <span className="discover__block-ico" aria-hidden>
+                      <ActivityIcon id={b.activityId} size={18} />
+                    </span>
                     <div>
-                      <div className="dist-bar__track">
-                        <div
-                          className="dist-bar__fill"
-                          style={{ width: `${Math.round((h / maxTotalHours) * 100)}%` }}
-                        />
-                      </div>
-                      <p className="dist-bar__pct">
-                        {h.toFixed(1)}h · {Math.round((h / maxTotalHours) * 100)}% of tracked week
+                      <p className="discover__block-label">{t(`act_${b.activityId}_label`)}</p>
+                      <p className="discover__block-time">
+                        {formatHm(b.startHour, b.startMinute)} –{" "}
+                        {b.endHour === 24 && b.endMinute === 0
+                          ? t("schedule_midnight")
+                          : formatHm(b.endHour, b.endMinute)}
                       </p>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  </li>
+                );
+              })}
+            </ol>
+            <p className="profile-post-delete-note friends__muted" style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                className="btn btn--outline btn--sm"
+                onClick={() => {
+                  void deleteSchedulePost(openMyPostEntry.id).then(() => setOpenMyPostId(null));
+                }}
+              >
+                Delete this post
+              </button>
+            </p>
           </div>
         </div>
       ) : null}

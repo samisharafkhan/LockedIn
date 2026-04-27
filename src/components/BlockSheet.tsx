@@ -5,7 +5,8 @@ import type { ActivityId, TimeBlock } from "../types";
 import { useSchedule } from "../context/ScheduleContext";
 import { ActivityIcon } from "./ActivityIcon";
 import { TimeDigitPick } from "./TimeDigitPick";
-import { hasConflict, isValidRange } from "../lib/scheduleBlocks";
+import { BlockEventMessagesPanel } from "./BlockEventMessagesPanel";
+import { isValidRange } from "../lib/scheduleBlocks";
 import {
   digitsPeriodToHour24,
   hour24ToDigitsAndPeriod,
@@ -23,12 +24,23 @@ type Props = {
   mode: Mode | null;
   allBlocks: TimeBlock[];
   onClose: () => void;
-  onSave: (block: Omit<TimeBlock, "id"> & { id?: string }) => void;
+  onSave: (block: Omit<TimeBlock, "id"> & { id?: string; repeatMode?: "none" | "daily" | "weekdays" | "weekends"; repeatWeeks?: number }) => void;
   onDelete?: (id: string) => void;
   onShare?: () => void;
+  /** When set, loads shared event threads for this day + block in edit mode. */
+  eventDayKey?: string | null;
 };
 
-export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete, onShare }: Props) {
+export function BlockSheet({
+  open,
+  mode,
+  allBlocks: _allBlocks,
+  onClose,
+  onSave,
+  onDelete,
+  onShare,
+  eventDayKey = null,
+}: Props) {
   const { t } = useSchedule();
   const [activityId, setActivityId] = useState<ActivityId>("work");
   const [startDigits, setStartDigits] = useState("");
@@ -37,6 +49,8 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete, o
   const [endPeriod, setEndPeriod] = useState<AmPm>("PM");
   const [endMidnight, setEndMidnight] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repeatMode, setRepeatMode] = useState<"none" | "daily" | "weekdays" | "weekends">("none");
+  const [repeatWeeks, setRepeatWeeks] = useState(1);
 
   useEffect(() => {
     if (!open || !mode) return;
@@ -73,6 +87,8 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete, o
       }
     }
     setError(null);
+    setRepeatMode("none");
+    setRepeatWeeks(1);
   }, [open, mode]);
 
   useEffect(() => {
@@ -137,11 +153,9 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete, o
       endHour,
       endMinute,
       activityId,
+      repeatMode: mode.kind === "add" ? repeatMode : "none",
+      repeatWeeks: mode.kind === "add" ? Math.max(1, Math.min(12, repeatWeeks)) : 1,
     };
-    if (hasConflict(allBlocks, candidate)) {
-      setError(t("block_err_overlap"));
-      return;
-    }
     setError(null);
     onSave({ ...candidate, activityId });
     onClose();
@@ -236,6 +250,41 @@ export function BlockSheet({ open, mode, allBlocks, onClose, onSave, onDelete, o
             <span>{t("block_ends_midnight")}</span>
           </label>
           <p className="sheet__micro">{t("block_tip_midnight_short")}</p>
+
+          {mode.kind === "add" ? (
+            <>
+              <p className="sheet__section-label">Repeat</p>
+              <div className="repeat-row">
+                <select
+                  className="me__field select"
+                  value={repeatMode}
+                  onChange={(e) =>
+                    setRepeatMode(e.target.value as "none" | "daily" | "weekdays" | "weekends")
+                  }
+                >
+                  <option value="none">Do not repeat</option>
+                  <option value="daily">Every day</option>
+                  <option value="weekdays">Weekdays only</option>
+                  <option value="weekends">Weekends only</option>
+                </select>
+                <label className="me__field repeat-row__weeks">
+                  <span>Weeks</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={repeatWeeks}
+                    onChange={(e) => setRepeatWeeks(Number(e.target.value) || 1)}
+                    disabled={repeatMode === "none"}
+                  />
+                </label>
+              </div>
+            </>
+          ) : null}
+
+          {mode.kind === "edit" && eventDayKey ? (
+            <BlockEventMessagesPanel dayKey={eventDayKey} blockId={mode.block.id} />
+          ) : null}
 
           {error ? <p className="sheet__error">{error}</p> : null}
         </div>

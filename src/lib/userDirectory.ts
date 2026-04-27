@@ -13,6 +13,9 @@ export type DirectoryUser = {
   handle: string;
   displayName: string;
   avatarEmoji?: string;
+  /** Synced from profile for avatars in feed / cards (optional, can be large). */
+  avatarImageDataUrl?: string | null;
+  avatarAnimalId?: string | null;
   bio?: string;
   /** Private account (follow requests). */
   isPrivate?: boolean;
@@ -23,11 +26,15 @@ export type DirectoryUser = {
 export function directoryUserFromFirestoreData(uid: string, x: Record<string, unknown>): DirectoryUser {
   const isPrivate = x.isPrivate === true || x.accountPublic === false;
   const bioRaw = x.bio;
+  const img = x.avatarImageDataUrl;
+  const animal = x.avatarAnimalId;
   return {
     uid,
     handle: String(x.handle ?? ""),
     displayName: String(x.displayName ?? ""),
     avatarEmoji: x.avatarEmoji != null ? String(x.avatarEmoji) : undefined,
+    avatarImageDataUrl: typeof img === "string" && img.length > 0 ? img : img === null ? null : undefined,
+    avatarAnimalId: typeof animal === "string" && animal.length > 0 ? animal : animal === null ? null : undefined,
     bio: typeof bioRaw === "string" ? bioRaw.slice(0, 160) : undefined,
     isPrivate,
     accountPublic: !isPrivate,
@@ -53,7 +60,7 @@ export function normalizeHandleKey(handle: string): string {
 export function userDirectoryWriteFields(uid: string, profile: Profile): Record<string, unknown> {
   const priv = profile.isPrivate === true || profile.accountPublic === false;
   const pub = !priv;
-  return {
+  const out: Record<string, unknown> = {
     uid,
     handle: profile.handle.trim(),
     displayName: profile.displayName.trim(),
@@ -65,6 +72,17 @@ export function userDirectoryWriteFields(uid: string, profile: Profile): Record<
     publishTodayToDiscover: pub && profile.publishTodayToDiscover === true,
     bio: (profile.bio ?? "").trim().slice(0, 160),
   };
+  if (profile.avatarImageDataUrl) {
+    out.avatarImageDataUrl = profile.avatarImageDataUrl;
+  } else {
+    out.avatarImageDataUrl = null;
+  }
+  if (profile.avatarAnimalId) {
+    out.avatarAnimalId = profile.avatarAnimalId;
+  } else {
+    out.avatarAnimalId = null;
+  }
+  return out;
 }
 
 /** Exact handle match (for sharing / invites). Requires `handleLower` on directory docs. */

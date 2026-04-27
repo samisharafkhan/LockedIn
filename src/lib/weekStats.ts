@@ -45,3 +45,17 @@ export function hoursForActivityOnDay(
     .filter((b) => b.activityId === activityId)
     .reduce((s, b) => s + blockDurationHours(b), 0);
 }
+
+/** Activity with the most hours on that day (tie-break: lexicographic id). */
+export function dominantActivityForDay(
+  blocks: TimeBlock[],
+): { activityId: ActivityId; hours: number } | null {
+  if (!blocks.length) return null;
+  const map = hoursByActivityForDay(blocks);
+  const positive = [...map.entries()].filter(([, h]) => h > 0);
+  if (positive.length === 0) {
+    return { activityId: blocks[0]!.activityId, hours: 0 };
+  }
+  positive.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return { activityId: positive[0]![0], hours: positive[0]![1] };
+}

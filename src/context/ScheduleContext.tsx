@@ -46,6 +46,7 @@ import {
   unfollowOrCancel,
 } from "../lib/follows";
 import { sortBlocks } from "../lib/scheduleBlocks";
+import { createIncomingNotification } from "../lib/socialNotifications";
 
 type ScheduleContextValue = {
   tick: number;
@@ -55,6 +56,8 @@ type ScheduleContextValue = {
   blocks: TimeBlock[];
   scheduleByDay: Record<string, TimeBlock[]>;
   addBlock: (b: Omit<TimeBlock, "id">) => void;
+  /** Replace all blocks for today in one update (e.g. AI day builder). */
+  replaceTodayWithBlocks: (list: Omit<TimeBlock, "id">[]) => void;
   updateBlock: (id: string, patch: Partial<Omit<TimeBlock, "id">>) => void;
   removeBlock: (id: string) => void;
   setBlockOutcome: (id: string, outcome: BlockOutcome) => void;
@@ -236,7 +239,9 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       setScheduleByDay({ [isoDate(new Date())]: migrated });
     }
 
-    if (Array.isArray(s.followingIds)) setFollowingIds(s.followingIds);
+    if (Array.isArray(s.followingIds)) {
+      setFollowingIds(s.followingIds.filter((id) => !demoFriendIdSet.has(id)));
+    }
     else setFollowingIds([]);
 
     if (s.pulse) {
@@ -395,9 +400,8 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
         for (const id of [...followPendingInFlight.current]) {
           if (pendingRemote.includes(id)) followPendingInFlight.current.delete(id);
         }
-        setFollowingIds((prev) => {
-          const demo = prev.filter((id) => demoFriendIdSet.has(id));
-          const next = new Set<string>([...demo, ...acceptedRemote]);
+        setFollowingIds(() => {
+          const next = new Set<string>(acceptedRemote);
           for (const id of followAcceptedInFlight.current) next.add(id);
           return [...next];
         });
@@ -576,6 +580,13 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     [updateToday],
   );
 
+  const replaceTodayWithBlocks = useCallback(
+    (list: Omit<TimeBlock, "id">[]) => {
+      updateToday(() => list.map((b) => ({ ...b, id: newId() })));
+    },
+    [updateToday],
+  );
+
   const updateBlock = useCallback(
     (id: string, patch: Partial<Omit<TimeBlock, "id">>) => {
       updateToday((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
@@ -673,12 +684,23 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
           (dir.data().isPrivate === true || dir.data().accountPublic === false);
         applyLocalFollowUi(serverPrivate);
         await requestOrAcceptFollow(db, firebaseUser.uid, friendId, serverPrivate);
+        await createIncomingNotification(db, {
+          toUid: friendId,
+          actorUid: firebaseUser.uid,
+          type: serverPrivate ? "follow_request" : "follow_accept",
+        });
       } catch (e) {
         console.error("[LockedIn] toggleFollow failed:", e);
         followAcceptedInFlight.current.delete(friendId);
         followPendingInFlight.current.delete(friendId);
         setFollowingIds((prev) => prev.filter((x) => x !== friendId));
         setPendingOutgoingFollowIds((prev) => prev.filter((x) => x !== friendId));
+        if (typeof e === "object" && e && "code" in e) {
+          const code = String((e as { code: string }).code);
+          if (code === "permission-denied") {
+            throw new Error("Couldn't follow right now. Check Firestore rules or try again shortly.");
+          }
+        }
         throw e instanceof Error ? e : new Error("Follow request failed.");
       }
     },
@@ -700,6 +722,11 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       const db = getFirestoreDb();
       if (!db || !firebaseUser) return;
       await acceptFollowRequestDoc(db, firebaseUser.uid, followerUid);
+      await createIncomingNotification(db, {
+        toUid: followerUid,
+        actorUid: firebaseUser.uid,
+        type: "follow_accept",
+      });
     },
     [firebaseUser],
   );
@@ -713,10 +740,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
     [firebaseUser],
   );
 
-  const getFriend = useCallback(
-    (id: string) => DEMO_FRIENDS.find((f) => f.id === id) ?? directoryById[id],
-    [directoryById],
-  );
+  const getFriend = useCallback((id: string) => directoryById[id], [directoryById]);
 
   const setPulse = useCallback((activityId: ActivityId) => {
     setPulseState({ activityId, at: Date.now() });
@@ -799,6 +823,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       blocks,
       scheduleByDay,
       addBlock,
+      replaceTodayWithBlocks,
       updateBlock,
       removeBlock,
       setBlockOutcome,
@@ -812,7 +837,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       hasPendingFollowRequest,
       acceptFollowRequest,
       rejectFollowRequest,
-      friends: DEMO_FRIENDS,
+      friends: [],
       getFriend,
       celebrities: CELEBRITY_ARCHETYPES,
       pulse,
@@ -843,6 +868,7 @@ export function ScheduleProvider({ children }: { children: ReactNode }) {
       blocks,
       scheduleByDay,
       addBlock,
+      replaceTodayWithBlocks,
       updateBlock,
       removeBlock,
       setBlockOutcome,

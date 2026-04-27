@@ -42,6 +42,28 @@ service cloud.firestore {
     match /publishedSchedules/{ownerUid} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == ownerUid;
+
+      match /likes/{uid} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null && request.auth.uid == uid;
+        allow delete: if request.auth != null && request.auth.uid == uid;
+        allow update: if false;
+      }
+      match /saves/{uid} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null && request.auth.uid == uid;
+        allow delete: if request.auth != null && request.auth.uid == uid;
+        allow update: if false;
+      }
+      match /comments/{commentId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() < 2000;
+        allow update, delete: if false;
+      }
     }
 
     match /follows/{followId} {
@@ -81,6 +103,56 @@ service cloud.firestore {
       );
     }
 
+    match /schedulePosts/{postId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null &&
+        request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if request.auth != null &&
+        resource.data.ownerUid == request.auth.uid;
+
+      match /likes/{uid} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null && request.auth.uid == uid;
+        allow delete: if request.auth != null && request.auth.uid == uid;
+        allow update: if false;
+      }
+      match /saves/{uid} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null && request.auth.uid == uid;
+        allow delete: if request.auth != null && request.auth.uid == uid;
+        allow update: if false;
+      }
+      match /comments/{commentId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() < 2000;
+        allow update, delete: if false;
+      }
+    }
+
+    match /userNotifications/{uid}/items/{itemId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null
+        && request.resource.data.toUid == uid
+        && request.resource.data.actorUid == request.auth.uid;
+      allow update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.toUid == resource.data.toUid
+        && request.resource.data.actorUid == resource.data.actorUid;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    match /userActivity/{uid}/items/{itemId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.actorUid == request.auth.uid;
+      allow update, delete: if request.auth != null && request.auth.uid == uid;
+    }
+
     match /blockShares/{shareId} {
       allow read: if request.auth != null && (
         !exists(/databases/$(database)/documents/blockShares/$(shareId)) ||
@@ -89,18 +161,67 @@ service cloud.firestore {
       );
       allow create: if request.auth != null &&
         request.resource.data.ownerUid == request.auth.uid;
-      allow update: if request.auth != null &&
-        (resource.data.ownerUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
+      // Owner: any update. Recipient: may not retarget the share; view/comment cannot change the collab copy; edit can.
+      allow update: if request.auth != null && (
+        request.auth.uid == resource.data.ownerUid
+        || (
+          request.auth.uid == resource.data.recipientUid
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.recipientUid == resource.data.recipientUid
+          && request.resource.data.blockId == resource.data.blockId
+          && request.resource.data.dayKey == resource.data.dayKey
+          && request.resource.data.block == resource.data.block
+          && request.resource.data.permission == resource.data.permission
+          && (
+            resource.data.permission == 'edit' ||
+            (resource.data.permission in ['view', 'comment'] && request.resource.data.collabBlock == resource.data.collabBlock)
+          )
+        )
+      );
       allow delete: if request.auth != null && resource.data.ownerUid == request.auth.uid;
 
       match /comments/{commentId} {
         allow read: if request.auth != null &&
           (get(/databases/$(database)/documents/blockShares/$(shareId)).data.ownerUid == request.auth.uid ||
            get(/databases/$(database)/documents/blockShares/$(shareId)).data.recipientUid == request.auth.uid);
-        allow create: if request.auth != null &&
-          request.resource.data.authorUid == request.auth.uid &&
-          (get(/databases/$(database)/documents/blockShares/$(shareId)).data.ownerUid == request.auth.uid ||
-           get(/databases/$(database)/documents/blockShares/$(shareId)).data.recipientUid == request.auth.uid);
+        allow create: if request.auth != null
+          && exists(/databases/$(database)/documents/blockShares/$(shareId))
+          && request.resource.data.keys().hasAll(['authorUid', 'text'])
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() < 2000
+          && (
+            get(/databases/$(database)/documents/blockShares/$(shareId)).data.ownerUid == request.auth.uid
+            || (
+              get(/databases/$(database)/documents/blockShares/$(shareId)).data.recipientUid == request.auth.uid
+              && get(/databases/$(database)/documents/blockShares/$(shareId)).data.permission in ['comment', 'edit']
+              && (!('inviteStatus' in get(/databases/$(database)/documents/blockShares/$(shareId)).data) ||
+                get(/databases/$(database)/documents/blockShares/$(shareId)).data.inviteStatus == 'accepted')
+            )
+          );
+        allow update, delete: if false;
+      }
+    }
+
+    match /stories/{storyId} {
+      allow read: if request.auth != null;
+      // `expiresAt` is a server-side Timestamp; single string field must stay under Firestore ~1MiB limit.
+      allow create: if request.auth != null
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.mediaDataUrl is string
+        && request.resource.data.mediaDataUrl.size() > 0
+        && request.resource.data.mediaDataUrl.size() < 1000000
+        && request.resource.data.expiresAt is timestamp;
+      allow update, delete: if request.auth != null && resource.data.ownerUid == request.auth.uid;
+
+      match /replies/{replyId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() < 2000;
         allow update, delete: if false;
       }
     }

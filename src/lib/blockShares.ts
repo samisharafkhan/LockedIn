@@ -76,6 +76,26 @@ export async function fetchBlockShareRecipients(
   return out;
 }
 
+/** If this user received this block as a share, return that share document id. */
+export async function fetchRecipientShareIdForBlock(
+  dayKey: string,
+  blockId: string,
+  recipientUid: string,
+): Promise<string | null> {
+  const db = getFirestoreDb();
+  if (!db) return null;
+  const q = query(
+    collection(db, BLOCK_SHARES_COLLECTION),
+    where("recipientUid", "==", recipientUid),
+    where("dayKey", "==", dayKey),
+    where("blockId", "==", blockId),
+    limit(1),
+  );
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  return snap.docs[0].id;
+}
+
 export async function upsertBlockShare(
   db: Firestore,
   shareId: string,

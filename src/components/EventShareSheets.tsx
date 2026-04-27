@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Share2, UserPlus, X } from "lucide-react";
+import { Check, Link2, Share2, UserPlus, X } from "lucide-react";
 import { doc, getDoc } from "firebase/firestore";
 import { useSchedule } from "../context/ScheduleContext";
-import { ACTIVITIES } from "../data/activities";
 import { getFirestoreDb } from "../lib/firebaseApp";
 import {
   USER_DIRECTORY_COLLECTION,
@@ -10,28 +9,14 @@ import {
   normalizeHandleKey,
 } from "../lib/userDirectory";
 import {
-  addShareComment,
   buildShareId,
   fetchBlockShareRecipients,
-  setShareInviteStatus,
-  subscribeBlockShare,
-  subscribeShareComments,
-  updateCollabBlock,
   upsertBlockShare,
-  type BlockShareComment,
-  type BlockShareDoc,
 } from "../lib/blockShares";
-import { timeBlockToStored, type StoredBlock } from "../lib/storage";
-import { isValidRange } from "../lib/scheduleBlocks";
-import {
-  digitsPeriodToHour24,
-  hour24ToDigitsAndPeriod,
-  timeDigitsIssues,
-  type AmPm,
-} from "../lib/timeDigits";
-import type { ActivityId, BlockSharePermission, TimeBlock } from "../types";
-import { ActivityIcon } from "./ActivityIcon";
-import { TimeDigitPick } from "./TimeDigitPick";
+import { createIncomingNotification } from "../lib/socialNotifications";
+import { timeBlockToStored } from "../lib/storage";
+import type { BlockSharePermission, TimeBlock } from "../types";
+import { EventShareThread } from "./EventShareThread";
 
 type ShareProps = {
   open: boolean;
@@ -40,6 +25,8 @@ type ShareProps = {
   dayKey: string;
 };
 
+type Collaborator = { recipientUid: string; handle: string; shareId: string };
+
 export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
   const { t, firebaseUser, followingIds, getFriend } = useSchedule();
   const [handleInput, setHandleInput] = useState("");
@@ -47,7 +34,8 @@ export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [okHint, setOkHint] = useState<string | null>(null);
-  const [collaborators, setCollaborators] = useState<{ recipientUid: string; handle: string }[]>([]);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const loadCollaborators = useCallback(async () => {
     if (!firebaseUser || !block) return;
@@ -56,11 +44,11 @@ export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
     const enriched = await Promise.all(
       rows.map(async (r) => {
         const f = getFriend(r.recipientUid);
-        if (f?.handle) return { recipientUid: r.recipientUid, handle: f.handle };
-        if (!db) return { recipientUid: r.recipientUid, handle: r.recipientUid.slice(0, 8) };
+        if (f?.handle) return { recipientUid: r.recipientUid, handle: f.handle, shareId: r.shareId };
+        if (!db) return { recipientUid: r.recipientUid, handle: r.recipientUid.slice(0, 8), shareId: r.shareId };
         const snap = await getDoc(doc(db, USER_DIRECTORY_COLLECTION, r.recipientUid));
         const h = snap.exists() ? String(snap.data().handle ?? "").trim() : "";
-        return { recipientUid: r.recipientUid, handle: h || r.recipientUid.slice(0, 8) };
+        return { recipientUid: r.recipientUid, handle: h || r.recipientUid.slice(0, 8), shareId: r.shareId };
       }),
     );
     setCollaborators(enriched);
@@ -72,6 +60,7 @@ export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
       setPermission("comment");
       setErr(null);
       setOkHint(null);
+      setCopiedId(null);
       void loadCollaborators();
     }
   }, [open, loadCollaborators]);
@@ -116,6 +105,12 @@ export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
         block: stored,
         permission,
       });
+      await createIncomingNotification(db, {
+        toUid: firebaseUser.uid,
+        actorUid: firebaseUser.uid,
+        type: "share_sent",
+        message: `Sent "${t(`act_${block.activityId}_label`)}" to @${match.handle}`,
+      });
       setOkHint(t("share_added", { handle: match.handle }));
       setHandleInput("");
       await loadCollaborators();
@@ -124,6 +119,19 @@ export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const copyEventLink = (shareId: string) => {
+    const url = `${window.location.origin}/s/${encodeURIComponent(shareId)}`;
+    void navigator.clipboard.writeText(url).then(
+      () => {
+        setCopiedId(shareId);
+        setTimeout(() => setCopiedId(null), 2000);
+      },
+      () => {
+        setErr(t("err_generic"));
+      },
+    );
   };
 
   return (
@@ -147,10 +155,19 @@ export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
           {collaborators.length > 0 ? (
             <div className="share-collab-section">
               <p className="sheet__section-label">{t("share_people_with_access")}</p>
-              <ul className="share-collab-chips" role="list">
+              <ul className="share-collab-list" role="list">
                 {collaborators.map((c) => (
-                  <li key={c.recipientUid} className="share-collab-chip">
-                    @{c.handle}
+                  <li key={c.shareId} className="share-collab-list__row">
+                    <span className="share-collab-list__name">@{c.handle}</span>
+                    <button
+                      type="button"
+                      className="btn btn--outline btn--sm share-copy-link-btn"
+                      onClick={() => copyEventLink(c.shareId)}
+                      aria-label={t("share_copy_event_link_aria", { handle: c.handle })}
+                    >
+                      {copiedId === c.shareId ? <Check size={16} /> : <Link2 size={16} aria-hidden />}
+                      {copiedId === c.shareId ? t("share_copied") : t("share_copy_event_link")}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -230,164 +247,10 @@ export function BlockShareSheet({ open, onClose, block, dayKey }: ShareProps) {
   );
 }
 
-function storedToTimeBlock(s: StoredBlock): TimeBlock {
-  return {
-    id: s.id,
-    startHour: s.startHour,
-    startMinute: s.startMinute,
-    endHour: s.endHour,
-    endMinute: s.endMinute,
-    activityId: s.activityId as ActivityId,
-    ...(s.outcome ? { outcome: s.outcome } : {}),
-  };
-}
-
 type IncomingProps = { shareId: string; onClose: () => void };
 
 export function IncomingShareSheet({ shareId, onClose }: IncomingProps) {
-  const { t, firebaseUser, mergeBlockIntoDay } = useSchedule();
-  const [doc, setDoc] = useState<BlockShareDoc | null>(null);
-  const [comments, setComments] = useState<BlockShareComment[]>([]);
-  const [commentText, setCommentText] = useState("");
-  const [activityId, setActivityId] = useState<ActivityId>("work");
-  const [startDigits, setStartDigits] = useState("");
-  const [startPeriod, setStartPeriod] = useState<AmPm>("AM");
-  const [endDigits, setEndDigits] = useState("");
-  const [endPeriod, setEndPeriod] = useState<AmPm>("PM");
-  const [endMidnight, setEndMidnight] = useState(false);
-  const [editErr, setEditErr] = useState<string | null>(null);
-  const [inviteBusy, setInviteBusy] = useState(false);
-  const [inviteErr, setInviteErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    const unsubDoc = subscribeBlockShare(shareId, setDoc);
-    const unsubComments = subscribeShareComments(shareId, setComments);
-    return () => {
-      unsubDoc();
-      unsubComments();
-    };
-  }, [shareId]);
-
-  useEffect(() => {
-    if (!doc?.collabBlock) return;
-    const b = storedToTimeBlock(doc.collabBlock);
-    setActivityId(b.activityId);
-    const s = hour24ToDigitsAndPeriod(b.startHour, b.startMinute);
-    setStartDigits(s.digits);
-    setStartPeriod(s.period);
-    if (b.endHour === 24 && b.endMinute === 0) {
-      setEndMidnight(true);
-      setEndDigits("");
-      setEndPeriod("PM");
-    } else {
-      setEndMidnight(false);
-      const e = hour24ToDigitsAndPeriod(b.endHour, b.endMinute);
-      setEndDigits(e.digits);
-      setEndPeriod(e.period);
-    }
-  }, [doc?.collabBlock, doc?.updatedAt]);
-
-  if (!firebaseUser || !doc) return null;
-
-  const isRecipient = doc.recipientUid === firebaseUser.uid;
-  const isOwner = doc.ownerUid === firebaseUser.uid;
-  const inviteStatus = doc.inviteStatus ?? "accepted";
-  const needsInviteResponse = isRecipient && inviteStatus === "pending";
-  const inviteResolvedForRecipient = !isRecipient || inviteStatus !== "pending";
-  const canComment = inviteResolvedForRecipient && (isOwner || (isRecipient && doc.permission !== "view"));
-  const canEdit = inviteResolvedForRecipient && doc.permission === "edit" && isRecipient;
-
-  const pushComment = async () => {
-    const text = commentText.trim();
-    if (!text || !canComment) return;
-    await addShareComment(shareId, firebaseUser.uid, text);
-    setCommentText("");
-  };
-
-  const saveCollab = async () => {
-    if (!canEdit || !doc) return;
-    setEditErr(null);
-    if (startDigits.length !== 4) {
-      setEditErr(t("block_err_time_incomplete"));
-      return;
-    }
-    const si = timeDigitsIssues(startDigits);
-    if (si.hour || si.minute) {
-      setEditErr(t("block_err_time_invalid"));
-      return;
-    }
-    const s24 = digitsPeriodToHour24(startDigits, startPeriod);
-    if (!s24) {
-      setEditErr(t("block_err_time_invalid"));
-      return;
-    }
-    let endHour: number;
-    let endMinute: number;
-    if (endMidnight) {
-      endHour = 24;
-      endMinute = 0;
-    } else {
-      if (endDigits.length !== 4) {
-        setEditErr(t("block_err_time_incomplete"));
-        return;
-      }
-      const ei = timeDigitsIssues(endDigits);
-      if (ei.hour || ei.minute) {
-        setEditErr(t("block_err_time_invalid"));
-        return;
-      }
-      const e24 = digitsPeriodToHour24(endDigits, endPeriod);
-      if (!e24) {
-        setEditErr(t("block_err_time_invalid"));
-        return;
-      }
-      endHour = e24.hour;
-      endMinute = e24.minute;
-    }
-    if (!isValidRange(s24.hour, s24.minute, endHour, endMinute)) {
-      setEditErr(t("block_err_range"));
-      return;
-    }
-    const next: StoredBlock = {
-      ...doc.collabBlock,
-      activityId,
-      startHour: s24.hour,
-      startMinute: s24.minute,
-      endHour,
-      endMinute,
-    };
-    await updateCollabBlock(shareId, next);
-  };
-
-  const b = doc.collabBlock ? storedToTimeBlock(doc.collabBlock) : null;
-
-  const acceptInvite = async () => {
-    if (!doc?.block) return;
-    setInviteErr(null);
-    setInviteBusy(true);
-    try {
-      await setShareInviteStatus(shareId, "accepted");
-      mergeBlockIntoDay(doc.dayKey, storedToTimeBlock(doc.block));
-    } catch (e) {
-      setInviteErr(e instanceof Error ? e.message : t("err_generic"));
-    } finally {
-      setInviteBusy(false);
-    }
-  };
-
-  const declineInvite = async () => {
-    setInviteErr(null);
-    setInviteBusy(true);
-    try {
-      await setShareInviteStatus(shareId, "declined");
-      onClose();
-    } catch (e) {
-      setInviteErr(e instanceof Error ? e.message : t("err_generic"));
-    } finally {
-      setInviteBusy(false);
-    }
-  };
-
+  const { t } = useSchedule();
   return (
     <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="incoming-share-title">
       <button type="button" className="sheet__backdrop" aria-label={t("block_close")} onClick={onClose} />
@@ -403,124 +266,7 @@ export function IncomingShareSheet({ shareId, onClose }: IncomingProps) {
           </div>
         </div>
         <div className="sheet__body">
-          {needsInviteResponse ? (
-            <div className="share-invite-actions">
-              <p className="sheet__lede">{t("share_invite_lede")}</p>
-              <div className="share-invite-actions__row">
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  disabled={inviteBusy}
-                  onClick={() => void acceptInvite()}
-                >
-                  {inviteBusy ? t("common_loading") : t("share_invite_accept")}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--outline"
-                  disabled={inviteBusy}
-                  onClick={() => void declineInvite()}
-                >
-                  {t("share_invite_decline")}
-                </button>
-              </div>
-              {inviteErr ? <p className="sheet__error">{inviteErr}</p> : null}
-            </div>
-          ) : null}
-          {inviteResolvedForRecipient ? (
-            <p className="sheet__micro">
-              {t("share_permission_show", { perm: t(`share_perm_${doc.permission}`) })}
-            </p>
-          ) : null}
-          {b ? (
-            <div className="share-preview">
-              <ActivityIcon id={b.activityId} size={28} />
-              <p className="share-preview__label">{t(`act_${b.activityId}_label`)}</p>
-            </div>
-          ) : null}
-
-          {inviteResolvedForRecipient && canEdit ? (
-            <>
-              <p className="sheet__section-label">{t("share_edit_collab")}</p>
-              <div className="activity-pick activity-pick--compact" role="listbox">
-                {ACTIVITIES.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`activity-pick__btn ${a.id === activityId ? "activity-pick__btn--on" : ""}`}
-                    onClick={() => setActivityId(a.id)}
-                  >
-                    <ActivityIcon id={a.id} size={20} />
-                    <span className="activity-pick__name">{t(`act_${a.id}_label`)}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="sheet__micro">{t("block_time_digits_hint")}</p>
-              <div className="time-digit-grid">
-                <TimeDigitPick
-                  label={t("block_starts")}
-                  digits={startDigits}
-                  period={startPeriod}
-                  onDigitsChange={setStartDigits}
-                  onPeriodChange={setStartPeriod}
-                />
-                <TimeDigitPick
-                  label={t("block_ends")}
-                  digits={endDigits}
-                  period={endPeriod}
-                  onDigitsChange={setEndDigits}
-                  onPeriodChange={setEndPeriod}
-                  disabled={endMidnight}
-                />
-              </div>
-              <label className="time-digit-midnight">
-                <input
-                  type="checkbox"
-                  checked={endMidnight}
-                  onChange={(e) => {
-                    setEndMidnight(e.target.checked);
-                    setEditErr(null);
-                  }}
-                />
-                <span>{t("block_ends_midnight")}</span>
-              </label>
-              {editErr ? <p className="sheet__error">{editErr}</p> : null}
-              <button type="button" className="btn btn--outline btn--wide" onClick={() => void saveCollab()}>
-                {t("share_apply_collab")}
-              </button>
-            </>
-          ) : null}
-
-          {inviteResolvedForRecipient ? (
-            <>
-              <p className="sheet__section-label">{t("share_comments")}</p>
-              <ul className="share-comments">
-                {comments.map((c) => (
-                  <li key={c.id} className="share-comments__row">
-                    <span className="share-comments__meta">
-                      {c.authorUid === firebaseUser.uid ? t("share_you") : c.authorUid.slice(0, 8)} ·
-                    </span>{" "}
-                    {c.text}
-                  </li>
-                ))}
-              </ul>
-              {canComment ? (
-                <div className="share-comment-form">
-                  <input
-                    className="field__input"
-                    value={commentText}
-                    onChange={(e) => setCommentText(e.target.value)}
-                    placeholder={t("share_comment_placeholder")}
-                  />
-                  <button type="button" className="btn btn--primary btn--sm" onClick={() => void pushComment()}>
-                    {t("share_comment_send")}
-                  </button>
-                </div>
-              ) : (
-                <p className="sheet__micro">{t("share_comments_view_only")}</p>
-              )}
-            </>
-          ) : null}
+          <EventShareThread shareId={shareId} onClose={onClose} />
         </div>
       </div>
     </div>
