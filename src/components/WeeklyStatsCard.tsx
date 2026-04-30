@@ -6,6 +6,8 @@ type WeeklyStatsCardProps = {
   stats: Stat[];
   displayName: string;
   onSelectStat: (id: ActivityId) => void;
+  /** When set, no outer card — parent supplies the surface (e.g. combined with Recent activity). */
+  embed?: boolean;
 };
 
 const COLORS: Record<string, string> = {
@@ -24,19 +26,25 @@ const COLORS: Record<string, string> = {
 /**
  * One summary block: top 3 activities + a horizontal distribution bar.
  */
-export function WeeklyStatsCard({ stats, displayName, onSelectStat }: WeeklyStatsCardProps) {
+export function WeeklyStatsCard({
+  stats,
+  displayName,
+  onSelectStat,
+  embed = false,
+}: WeeklyStatsCardProps) {
   const top = stats.slice(0, 3);
   const total = top.reduce((s, x) => s + x.hours, 0) || 1;
+  const surfaceClass = embed ? "weekly-stats weekly-stats--embed" : "weekly-stats soft-card";
   if (top.length === 0) {
     return (
-      <div className="weekly-stats soft-card">
+      <div className={surfaceClass}>
         <h3 className="weekly-stats__h">This week</h3>
         <p className="weekly-stats__empty">Add blocks to your schedule to see a weekly picture.</p>
       </div>
     );
   }
   return (
-    <div className="weekly-stats soft-card">
+    <div className={surfaceClass}>
       <h3 className="weekly-stats__h">This week</h3>
       <ul className="weekly-stats__lines" role="list">
         {top.map((it) => (

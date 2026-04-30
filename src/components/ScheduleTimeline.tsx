@@ -11,7 +11,6 @@ type TimelineBlock = {
   heightPct: number;
   leftPct?: number;
   widthPct?: number;
-  tone?: "sage" | "blue" | "purple" | "butter" | "beige";
   rightTag?: string;
 };
 
@@ -63,7 +62,6 @@ export function ScheduleTimeline({
               left={typeof block.leftPct === "number" ? `${block.leftPct}%` : undefined}
               width={typeof block.widthPct === "number" ? `${Math.max(block.widthPct, 12)}%` : undefined}
               rightTag={block.rightTag}
-              tone={block.tone}
               onClick={() => onOpenBlock(block.id)}
             />
           ))

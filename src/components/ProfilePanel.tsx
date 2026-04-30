@@ -471,33 +471,46 @@ export function ProfilePanel() {
         </div>
       </div>
 
-      <WeeklyStatsCard
-        stats={feedItems}
-        displayName={profile.displayName}
-        onSelectStat={openMetric}
-      />
-
       {firebaseUser && myActivityRows.length > 0 ? (
         <div className="profile__section">
-          <h3 className="profile-recent__h">Recent activity</h3>
-          <ul className="profile-recent__list" role="list">
-            {myActivityRows.slice(0, 3).map(({ id, data }) => (
-              <li key={id} className="profile-recent__row">
-                <span className="profile-recent__mark" aria-hidden>
-                  {data.type === "liked" ? "♥" : data.type === "saved" ? "★" : "✎"}
-                </span>
-                <p className="profile-recent__text">
-                  {data.type === "liked" ? "Liked" : data.type === "saved" ? "Saved" : "Commented"}{" "}
-                  {data.message ? <span>“{data.message}”</span> : "a post"}
-                </p>
-              </li>
-            ))}
-          </ul>
-          <button type="button" className="btn btn--sm btn--outline" onClick={() => setMeScreen("activity")}>
-            See all activity
-          </button>
+          <div className="soft-card profile-insights-card">
+            <WeeklyStatsCard
+              embed
+              stats={feedItems}
+              displayName={profile.displayName}
+              onSelectStat={openMetric}
+            />
+            <div className="profile-insights-card__rule" aria-hidden />
+            <div className="profile-recent-integrated" aria-labelledby="profile-recent-heading">
+              <h3 className="profile-recent__h" id="profile-recent-heading">
+                Recent activity
+              </h3>
+              <ul className="profile-recent__list" role="list">
+                {myActivityRows.slice(0, 3).map(({ id, data }) => (
+                  <li key={id} className="profile-recent__row">
+                    <span className="profile-recent__mark" aria-hidden>
+                      {data.type === "liked" ? "♥" : data.type === "saved" ? "★" : "✎"}
+                    </span>
+                    <p className="profile-recent__text">
+                      {data.type === "liked" ? "Liked" : data.type === "saved" ? "Saved" : "Commented"}{" "}
+                      {data.message ? <span>“{data.message}”</span> : "a post"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <button type="button" className="btn btn--sm btn--outline" onClick={() => setMeScreen("activity")}>
+                See all activity
+              </button>
+            </div>
+          </div>
         </div>
-      ) : null}
+      ) : (
+        <WeeklyStatsCard
+          stats={feedItems}
+          displayName={profile.displayName}
+          onSelectStat={openMetric}
+        />
+      )}
 
       {firebaseUser && myPostRows.length > 0 ? (
         <div className="profile__section profile__section--posts">

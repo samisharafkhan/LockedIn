@@ -233,21 +233,22 @@ export function DiscoverPanel() {
 
       <SoftCard>
         <p className="discover__publish-line">{t("discover_publish_short")}</p>
-        {firebaseUser ? (
-          <PillButton
-            variant="primary"
-            type="button"
-            disabled={profile.isPrivate === true}
-            onClick={() => setProfile({ publishTodayToDiscover: !profile.publishTodayToDiscover })}
-            style={{ marginTop: 8 }}
-          >
-            {profile.publishTodayToDiscover ? t("discover_published_pill") : t("discover_publish_today_pill")}
-          </PillButton>
-        ) : null}
-        <button type="button" className="discover__learn-more" onClick={() => setLearnOpen((o) => !o)}>
-          {t("discover_learn_privacy_link")}
-        </button>
-        {learnOpen ? <p className="friends__muted discover__learn-body">{t("discover_privacy_learn_short")}</p> : null}
+        <div className="discover__publish-actions">
+          {firebaseUser ? (
+            <PillButton
+              variant="primary"
+              type="button"
+              disabled={profile.isPrivate === true}
+              onClick={() => setProfile({ publishTodayToDiscover: !profile.publishTodayToDiscover })}
+            >
+              {profile.publishTodayToDiscover ? t("discover_published_pill") : t("discover_publish_today_pill")}
+            </PillButton>
+          ) : null}
+          <button type="button" className="discover__learn-more" onClick={() => setLearnOpen((o) => !o)}>
+            {t("discover_learn_privacy_link")}
+          </button>
+        </div>
+        {learnOpen ? <p className="friends__muted discover__learn-body discover__learn-body--spaced">{t("discover_privacy_learn_short")}</p> : null}
       </SoftCard>
 
       {busy ? (
@@ -276,7 +277,7 @@ export function DiscoverPanel() {
                         return (
                           <li key={b.id} className="discover__block-row discover__block-row--compact">
                             <span className="discover__block-ico" aria-hidden>
-                              <ActivityIcon id={b.activityId} size={14} />
+                              <ActivityIcon id={b.activityId} size={16} />
                             </span>
                             <p className="discover__block-time">
                               {t(`act_${b.activityId}_label`)} · {formatHm(b.startHour, b.startMinute)}

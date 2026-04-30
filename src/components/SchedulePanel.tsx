@@ -41,14 +41,6 @@ function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
-function activityTone(activityId: TimeBlock["activityId"]): "sage" | "blue" | "purple" | "butter" | "beige" {
-  if (activityId === "work" || activityId === "focus" || activityId === "class") return "beige";
-  if (activityId === "social" || activityId === "chill") return "purple";
-  if (activityId === "gym" || activityId === "commute") return "blue";
-  if (activityId === "travel") return "butter";
-  return "sage";
-}
-
 export function SchedulePanel() {
   const {
     blocks,
@@ -153,7 +145,6 @@ export function SchedulePanel() {
           heightPct: normalizedHeight,
           leftPct: layout?.leftPct ?? 0,
           widthPct: layout?.widthPct ?? 100,
-          tone: activityTone(b.activityId),
           rightTag: b.outcome === "done" ? "Done" : b.outcome === "not_done" ? "Missed" : undefined,
         };
       })

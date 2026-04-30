@@ -1,5 +1,6 @@
 import { ActivityIcon } from "./ActivityIcon";
 import type { ActivityId } from "../types";
+import { activityBlockChrome } from "../lib/activityBlockColors";
 
 type TimeBlockProps = {
   activityId: ActivityId;
@@ -11,7 +12,6 @@ type TimeBlockProps = {
   width?: string;
   onClick: () => void;
   rightTag?: string;
-  tone?: "sage" | "blue" | "purple" | "butter" | "beige";
 };
 
 export function TimeBlock({
@@ -24,26 +24,42 @@ export function TimeBlock({
   width,
   onClick,
   rightTag,
-  tone = "beige",
 }: TimeBlockProps) {
+  const c = activityBlockChrome(activityId);
+
   return (
     <button
       type="button"
-      className={`timeline-block timeline-block--${tone}`}
-      style={{ top, height, ...(left ? { left } : {}), ...(width ? { width } : {}) }}
+      className="timeline-block schedule-event-chip"
+      style={{
+        top,
+        height,
+        ...(left ? { left } : {}),
+        ...(width ? { width } : {}),
+        background: c.bg,
+        borderColor: c.border,
+        borderStyle: "solid",
+        borderWidth: 2,
+        color: c.fg,
+        ["--evt-icon-fg" as string]: c.iconFg,
+      }}
       onClick={onClick}
       aria-label={`${label} ${timeLabel}`}
     >
       <span className="timeline-block__left">
-        <span className="timeline-block__icon" aria-hidden>
-          <ActivityIcon id={activityId} size={16} />
+        <span className="timeline-block__icon schedule-event-chip__ico" aria-hidden>
+          <ActivityIcon id={activityId} size={18} />
         </span>
-        <span>
-          <span className="timeline-block__label">{label}</span>
-          <span className="timeline-block__time">{timeLabel}</span>
+        <span className="timeline-block__titles">
+          <span className="timeline-block__label schedule-event-chip__title">{label}</span>
+          <span className="timeline-block__time schedule-event-chip__time" style={{ color: c.fgMuted }}>
+            {timeLabel}
+          </span>
         </span>
       </span>
-      {rightTag ? <span className="timeline-block__tag">{rightTag}</span> : null}
+      {rightTag ? (
+        <span className="timeline-block__tag schedule-event-chip__tag">{rightTag}</span>
+      ) : null}
     </button>
   );
 }
